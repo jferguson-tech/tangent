@@ -10,10 +10,19 @@ const G = 9.81;
 const PRESS = 3.0;          // m/s^2 toward the surface
 const DAMP = 0.992;         // velocity kept per substep
 const FRICTION = 0.3;       // in-plane velocity lost while touching the surface
+const STATIC_FRICTION = 2e-5; // m per substep: slower in-plane motion on a surface stops (static friction)
+const SETTLE_RAMP = 300;    // frames without disturbance over which extra damping fades in
+const SETTLE_DAMP = 0.12;   // extra velocity loss per substep once fully undisturbed
 const SUBSTEPS = 8;     // many small steps stretch far less than many iterations
 const ITERS = 4;
 const SETTLE_SPEED = 2e-5;  // m per frame; slower than this counts as resting
 const SETTLE_FRAMES = 40;
+// Contact on steep bevels can leave a tiny limit cycle (the height field is
+// sampled in steps, so the push-out direction flips between neighbouring
+// samples). After this long undisturbed, motion below RESTING_SPEED counts as
+// at rest: 0.5 mm is a tenth of the thinnest generated wire and invisible.
+const RESTING_AGE = 600;    // frames (10 s at 60 fps)
+const RESTING_SPEED = 5e-4; // m per frame
 
 export function polylineLength(P) {
   let L = 0;
@@ -81,13 +90,17 @@ export class WireSim {
     this.params = { gravityAngle: 90, gravity: 1, collide: true };
     this.grab = null;
     this.quietFrames = 0;
+    this.age = 0;               // frames since the last disturbance
     this.lastSpeed = Infinity;
   }
 
   // field: { w, h, data: Float32Array (row 0 = top), width, height (meters), wrap }
   setField(field) { this.field = field; }
 
-  setParams(p) { Object.assign(this.params, p); this.quietFrames = 0; }
+  // Something changed (wires, gravity, endpoints, a grab): settle afresh.
+  disturb() { this.quietFrames = 0; this.age = 0; }
+
+  setParams(p) { Object.assign(this.params, p); this.disturb(); }
 
   sample(x, y) {
     const f = this.field;
@@ -115,7 +128,7 @@ export class WireSim {
   // specs: [{ id, a: [x, y], b: [x, y], points: [[x, y]...], radius (in-plane), thick (z), slack }]
   setWires(specs) {
     this.wires = specs.map((s) => this._make(s));
-    this.quietFrames = 0;
+    this.disturb();
   }
 
   _make(s) {
@@ -160,7 +173,7 @@ export class WireSim {
     if (!w) return;
     w.a = [...a];
     w.b = [...b];
-    this.quietFrames = 0;
+    this.disturb();
   }
 
   // Grab the particle nearest (x, y) within maxDist meters. Returns true if one was grabbed.
@@ -174,25 +187,28 @@ export class WireSim {
     }
     if (!best) return false;
     this.grab = { ...best, x, y };
-    this.quietFrames = 0;
+    this.disturb();
     return true;
   }
 
-  dragTo(x, y) { if (this.grab) { this.grab.x = x; this.grab.y = y; this.quietFrames = 0; } }
+  dragTo(x, y) { if (this.grab) { this.grab.x = x; this.grab.y = y; this.disturb(); } }
 
-  release() { this.grab = null; }
+  release() { this.grab = null; this.disturb(); }
 
   get settled() { return this.quietFrames >= SETTLE_FRAMES; }
 
   step(dt = 1 / 60) {
     const h = dt / SUBSTEPS;
+    // A real cable comes to rest through friction; extra damping that fades in
+    // while nothing disturbs the scene lets contact jitter die out the same way.
+    const damp = DAMP * (1 - SETTLE_DAMP * Math.min(1, this.age / SETTLE_RAMP));
     const ga = (this.params.gravityAngle * Math.PI) / 180;
     const gm = G * this.params.gravity;
     const gx = Math.cos(ga) * gm * h * h, gy = Math.sin(ga) * gm * h * h, gz = -PRESS * h * h;
     const startX = this.wires.map((w) => Float64Array.from(w.x));
     const startY = this.wires.map((w) => Float64Array.from(w.y));
     for (let s = 0; s < SUBSTEPS; s++) {
-      for (const w of this.wires) this._integrate(w, gx, gy, gz);
+      for (const w of this.wires) this._integrate(w, gx, gy, gz, damp);
       for (let it = 0; it < ITERS; it++) for (const w of this.wires) this._constraints(w);
       if (this.params.collide && this.wires.length > 1) this._collideWires();
       for (const w of this.wires) this._collideField(w, true);
@@ -202,14 +218,16 @@ export class WireSim {
       for (let i = 0; i < w.n; i++) speed = Math.max(speed, Math.hypot(w.x[i] - startX[k][i], w.y[i] - startY[k][i]));
     });
     this.lastSpeed = speed;
-    this.quietFrames = speed < SETTLE_SPEED && !this.grab ? this.quietFrames + 1 : 0;
+    this.age++;
+    const still = speed < SETTLE_SPEED || (this.age >= RESTING_AGE && speed < RESTING_SPEED);
+    this.quietFrames = still && !this.grab ? this.quietFrames + 1 : 0;
     return speed;
   }
 
-  _integrate(w, gx, gy, gz) {
+  _integrate(w, gx, gy, gz, damp = DAMP) {
     for (let i = 0; i < w.n; i++) {
       if (w.inv[i] === 0) continue;
-      const vx = (w.x[i] - w.px[i]) * DAMP, vy = (w.y[i] - w.py[i]) * DAMP, vz = (w.z[i] - w.pz[i]) * DAMP;
+      const vx = (w.x[i] - w.px[i]) * damp, vy = (w.y[i] - w.py[i]) * damp, vz = (w.z[i] - w.pz[i]) * damp;
       w.px[i] = w.x[i]; w.py[i] = w.y[i]; w.pz[i] = w.z[i];
       w.x[i] += vx + gx;
       w.y[i] += vy + gy;
@@ -274,18 +292,31 @@ export class WireSim {
   _collideField(w, friction) {
     for (let i = 0; i < w.n; i++) {
       if (w.inv[i] === 0) continue;
-      const [hgt, hx, hy] = this.sample(w.x[i], w.y[i]);
+      const hgt = this.sample(w.x[i], w.y[i])[0];
       const pen = hgt + w.thick - w.z[i];
       if (pen <= 0) continue;
-      // Push out along the surface normal: steep bevels push sideways.
+      // Push out along the surface normal: steep bevels push sideways. The
+      // slope is measured across about the wire's own width (not one texel),
+      // so the push direction changes smoothly as the particle moves over a
+      // sharp edge instead of flipping between texels and never settling.
+      const f = this.field;
+      const e = Math.max(w.thick, f ? 1.5 * f.width / f.w : 0.002);
+      const hx = (this.sample(w.x[i] + e, w.y[i])[0] - this.sample(w.x[i] - e, w.y[i])[0]) / (2 * e);
+      const hy = (this.sample(w.x[i], w.y[i] + e)[0] - this.sample(w.x[i], w.y[i] - e)[0]) / (2 * e);
       const nl = Math.hypot(hx, hy, 1);
       const nx = -hx / nl, ny = -hy / nl, nz = 1 / nl;
       const m = pen * nz;
       w.x[i] += nx * m; w.y[i] += ny * m; w.z[i] += nz * m;
       if (w.z[i] < hgt + w.thick) w.z[i] = hgt + w.thick;
       if (friction) {
-        w.px[i] += (w.x[i] - w.px[i]) * FRICTION;
-        w.py[i] += (w.y[i] - w.py[i]) * FRICTION;
+        const mx = w.x[i] - w.px[i], my = w.y[i] - w.py[i];
+        if (mx * mx + my * my < STATIC_FRICTION * STATIC_FRICTION) {
+          w.px[i] = w.x[i];               // static friction: barely moving on a surface means resting
+          w.py[i] = w.y[i];
+          continue;
+        }
+        w.px[i] += mx * FRICTION;
+        w.py[i] += my * FRICTION;
       }
     }
   }
