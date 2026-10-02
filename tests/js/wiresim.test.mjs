@@ -110,3 +110,24 @@ test('many wires stay fast', () => {
   // seconds); typical is ~40 ms on an idle machine, so busy machines still pass.
   assert.ok(ms < 250, `100 wires step in ${ms.toFixed(1)} ms`);
 });
+
+for (const gravity of [1, 3]) test(`a long thin wire draped over steep bevels comes to rest (gravity ${gravity})`, () => {
+  // 2 m canvas, 512 px field with a raised 34 mm plateau whose edges slope at ~50 degrees.
+  const n = 512, W = 2;
+  const data = new Float32Array(n * n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const d = Math.min(x - 180, 330 - x, y - 120, 400 - y) * (W / n);   // distance inside the plateau (m)
+    data[y * n + x] = Math.max(0, Math.min(0.034, d * 1.2));
+  }
+  const sim = new WireSim();
+  sim.setField({ w: n, h: n, data, width: W, height: W, wrap: false });
+  sim.setParams({ gravity });
+  sim.setWires([
+    { id: 'long', a: [0.4, 0.5], b: [1.55, 1.2], points: null, radius: 0.003, thick: 0.003, slack: 1.25 },
+    { id: 'hose', a: [0.6, 1.3], b: [1.4, 0.4], points: null, radius: 0.007, thick: 0.007, slack: 1.2 },
+  ]);
+  run(sim, 1500);
+  assert.ok(sim.settled, `settles within 25 s (motion ${(sim.lastSpeed * 1000).toFixed(3)} mm/frame)`);
+  const w = sim.wires[0];
+  for (let i = 0; i < w.n; i++) assert.ok(w.z[i] >= sim.sample(w.x[i], w.y[i])[0] + w.thick - 1e-3, 'stays on the surface');
+});

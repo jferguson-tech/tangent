@@ -1,6 +1,6 @@
 // App entry: wires the store, editor, property panels, baker and render pane.
 
-import { $, $$, el, clone, fmt, uid, download, snap } from './util.js';
+import { $, $$, el, clone, fmt, uid, download, snap, debounce } from './util.js';
 import { api } from './api.js';
 import { Store } from './store.js';
 import { GLView } from './glview.js';
@@ -41,7 +41,7 @@ async function main() {
   // ---- wires: simulation controller and editor layer ---------------------------
   const sim = new SimController(store, {
     onFrame: () => { editor.requestDraw(); updateSimStatus(); },
-    onState: () => { updateSimUI(); baker.request('full'); },
+    onState: () => { updateSimUI(); invalidateDetail(); baker.request('full'); },
   });
   editor.wires = new WireLayer(editor, store, sim);
 
@@ -96,6 +96,82 @@ async function main() {
   $('#matchLights').addEventListener('change', updateEditorLight);
   updateEditorLight();
 
+  // Wires the simulation is moving are drawn live by the overlay, so bakes hide them.
+  const bakeDoc = () => {
+    const live = sim.activeIds();
+    if (!live.size) return store.doc;
+    const doc = clone(store.doc);
+    for (const w of doc.wires) if (live.has(w.id)) w.visible = false;
+    return doc;
+  };
+
+  // ---- zoom-aware detail -----------------------------------------------------------
+  // The overview is at most 1024 px across the canvas. Zoomed in further, the
+  // visible area is baked at up to the full texel density (never more than the
+  // screen can show) and drawn over the overview.
+  const DETAIL_MAX_PX = 2000;
+  const detail = { norm: null, overviewPpm: 0, have: null, inflight: false, again: false, seq: 0 };
+  const visibleRect = () => {
+    const d = store.doc;
+    const [ax, ay] = editor.toWorld(0, 0);
+    const [bx, by] = editor.toWorld(editor.cssW, editor.cssH);
+    const r = { x0: Math.max(0, ax), y0: Math.max(0, ay), x1: Math.min(d.canvas_w, bx), y1: Math.min(d.canvas_h, by) };
+    return r.x1 > r.x0 && r.y1 > r.y0 ? r : null;
+  };
+  const detailWanted = () => {
+    const d = store.doc;
+    if (!detail.norm || !glview.setDetail || editor.tiles !== 1) return null;
+    const vis = visibleRect();
+    if (!vis) return null;
+    let ppm = Math.min(d.texel_density, editor.view.scale * (editor.dpr || 1));
+    if (ppm < detail.overviewPpm * 1.25) return null;          // the overview is already sharp enough
+    const mx = (vis.x1 - vis.x0) * 0.15, my = (vis.y1 - vis.y0) * 0.15;
+    const r = { x0: Math.max(0, vis.x0 - mx), y0: Math.max(0, vis.y0 - my),
+                x1: Math.min(d.canvas_w, vis.x1 + mx), y1: Math.min(d.canvas_h, vis.y1 + my) };
+    const side = Math.max(r.x1 - r.x0, r.y1 - r.y0);
+    if (side * ppm > DETAIL_MAX_PX) ppm = DETAIL_MAX_PX / side;
+    if (ppm < detail.overviewPpm * 1.25) return null;
+    return { ...r, px_per_m: ppm, vis };
+  };
+  const covers = (have, want) => have && have.x0 <= want.vis.x0 + 1e-9 && have.y0 <= want.vis.y0 + 1e-9
+    && have.x1 >= want.vis.x1 - 1e-9 && have.y1 >= want.vis.y1 - 1e-9 && have.px_per_m >= want.px_per_m * 0.85;
+  const dropDetail = () => {
+    glview.clearDetail && glview.clearDetail();
+    detail.have = null;
+    $('#stDetail').textContent = '';
+  };
+  const updateDetail = async () => {
+    const want = detailWanted();
+    if (!want) { if (detail.have) { dropDetail(); editor.requestDraw(); } return; }
+    if (covers(detail.have, want)) return;
+    if (detail.inflight) { detail.again = true; return; }
+    detail.inflight = true;
+    const seq = ++detail.seq;
+    const token = glview.detailToken;
+    const W = store.doc.canvas_w, H = store.doc.canvas_h;
+    $('#stDetail').textContent = 'detail…';
+    try {
+      const { vis, ...region } = want;
+      const r = await api.bakeDetail(bakeDoc(), region, detail.norm);
+      if (seq !== detail.seq || token !== glview.detailToken) return;     // edited meanwhile
+      const [x0, y0, x1, y1] = r.info.region;
+      if (await glview.setDetail(r.maps, [x0 / W, y0 / H, x1 / W, y1 / H], token)) {
+        detail.have = { x0, y0, x1, y1, px_per_m: r.info.px_per_m };
+        $('#stDetail').textContent = `detail ${r.info.width}×${r.info.height} @ ${fmt(r.info.px_per_m, 0)} px/m · ${fmt(r.info.ms, 0)} ms`;
+        editor.requestDraw();
+      }
+    } catch (e) {
+      $('#stDetail').textContent = `detail failed: ${e.message}`;
+    } finally {
+      detail.inflight = false;
+      if (detail.again) { detail.again = false; scheduleDetail(); }
+    }
+  };
+  const scheduleDetail = debounce(updateDetail, 180);
+  editor.onViewChange = scheduleDetail;
+  // Any edit makes the patch stale: drop it now, re-bake after the overview.
+  const invalidateDetail = () => { detail.norm = null; detail.seq++; dropDetail(); };
+
   // ---- baking: one request in flight, newest request wins -----------------------
   const baker = {
     inflight: false, queued: null,
@@ -111,20 +187,21 @@ async function main() {
         ? [...new Set([MAP_FOR_MODE[editor.mode], ...(editor.mode === 'lit' ? ['emissive'] : [])])]
         : ['normal', 'height', 'ao', 'curvature', 'id', 'emissive', 'spill', 'wires'];
       if (fast && editor.mode === 'lit') maps.push('wires');
-      // Wires the simulation is moving are drawn live by the overlay instead.
-      const live = sim.activeIds();
-      let doc = store.doc;
-      if (live.size) {
-        doc = clone(doc);
-        for (const w of doc.wires) if (live.has(w.id)) w.visible = false;
-      }
       try {
-        const r = await api.bake(doc, maps, fast ? 512 : 1024);
+        const r = await api.bake(bakeDoc(), maps, fast ? 512 : 1024);
         if (r.wire_paths) Object.assign(editor.wires.paths, r.wire_paths);
         await glview.setMaps(r.maps);
         if (!fast || maps.includes('height')) editor.hrange = [r.info.height_min, r.info.height_max];
         if ('emissive_scale' in r.info) editor.emis.scale = r.info.emissive_scale;
         if ('spill_scale' in r.info) editor.emis.spillScale = r.info.spill_scale;
+        if (!fast) {
+          // The detail patch encodes with exactly the overview's scaling.
+          const i = r.info;
+          detail.norm = { height_min: i.height_min, height_max: i.height_max,
+            emissive_scale: i.emissive_scale ?? 0, curvature_scale: i.curvature_scale ?? 0 };
+          detail.overviewPpm = i.width / store.doc.canvas_w;
+          scheduleDetail();
+        }
         $('#stBake').textContent = `bake ${fmt(r.info.ms, 0)} ms · ${r.info.width}×${r.info.height}${r.info.width < r.info.full_width ? ` (preview of ${r.info.full_width}×${r.info.full_height})` : ''}`;
         if (!fast) {
           panelProps.setWarnings(r.warnings);
@@ -356,6 +433,7 @@ async function main() {
   // ---- store events ---------------------------------------------------------
   store.on((type, source) => {
     if (type === 'doc') {
+      invalidateDetail();
       baker.request('full');
       render.schedule();
       updateDocInfo();
@@ -370,6 +448,7 @@ async function main() {
       snapRow.refresh();
       editor.requestDraw();
     } else if (type === 'live') {
+      invalidateDetail();
       baker.request('fast');
       if (sim.running) sim.syncEnds();
       if (source === 'editor') refreshInspector();
@@ -389,7 +468,7 @@ async function main() {
     editor.mode = b.dataset.mode;
     editor.requestDraw();
   }));
-  $('#tile3').addEventListener('change', (e) => { editor.tiles = e.target.checked ? 3 : 1; editor.fit(); });
+  $('#tile3').addEventListener('change', (e) => { editor.tiles = e.target.checked ? 3 : 1; editor.fit(); scheduleDetail(); });
   $('#btnFit').addEventListener('click', () => editor.fit());
   $$('#rightTabs button').forEach((b) => b.addEventListener('click', () => {
     $$('#rightTabs button').forEach((x) => x.classList.toggle('on', x === b));
@@ -527,7 +606,7 @@ async function main() {
   window.addEventListener('keyup', (e) => { if (e.key === ' ') editor.space = false; });
 
   // Debug handle for the browser console and automated UI checks.
-  window.__tangent = { store, editor, render, baker, meta, sim };
+  window.__tangent = { store, editor, render, baker, meta, sim, detail };
 
   // ---- first paint -------------------------------------------------------------------
   renderLayoutForm($('#layoutForm'), store, meta);

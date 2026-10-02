@@ -76,17 +76,21 @@ def ambient_occlusion(H, pm, radius_m, tiling, dirs=8, steps=6):
     return np.clip(1.0 - occ / dirs, 0.0, 1.0)
 
 
-def curvature(H, pm, tiling):
-    """Convex edges bright, concave dark, 0.5 = flat. Auto-normalized."""
+def curvature(H, pm, tiling, scale=None):
+    """Convex edges bright, concave dark, 0.5 = flat. Returns (map, scale).
+
+    The scale is auto-picked (99.5th percentile) unless given, so a detail
+    bake can reuse the overview's scale and match it exactly."""
     P = _pad(H, 1, tiling)
     lap = (P[:-2, 1:-1] + P[2:, 1:-1] + P[1:-1, :-2] + P[1:-1, 2:] - 4 * H) / (pm * pm)
     c = -lap
     Q = _pad(c, 1, tiling)
     c = sum(Q[j: j + H.shape[0], i: i + H.shape[1]] for j in range(3) for i in range(3)) / 9.0
-    scale = float(np.percentile(np.abs(c), 99.5))
+    if scale is None:
+        scale = float(np.percentile(np.abs(c), 99.5))
     if scale <= 0:
-        return np.full(H.shape, 0.5, np.float32)
-    return (0.5 + 0.5 * np.clip(c / scale, -1.0, 1.0)).astype(np.float32)
+        return np.full(H.shape, 0.5, np.float32), 0.0
+    return (0.5 + 0.5 * np.clip(c / scale, -1.0, 1.0)).astype(np.float32), float(scale)
 
 
 def id_colors(ids):
@@ -153,8 +157,9 @@ def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05):
     out["height"] = H
     if "ao" in want:
         out["ao"] = ambient_occlusion(H, pm, ao_radius, doc.tiling)
+    info = {}
     if "curvature" in want:
-        out["curvature"] = curvature(H, pm, doc.tiling)
+        out["curvature"], info["curvature_scale"] = curvature(H, pm, doc.tiling)
     if Ms is not None and ("wires" in want or "wiremask" in want):  # wiremask: internal alias
         out["wires"] = _downsample(Ms, ss).astype(np.float32)
     if "height_raw" in want:
@@ -165,7 +170,6 @@ def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05):
             out["id"] = id_colors(ids)
         if "ids" in want:
             out["ids"] = ids
-    info = {}
     if need_emit:
         E = _downsample(Es, ss).astype(np.float32)
         out["emissive"] = E
@@ -187,5 +191,95 @@ def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05):
         "full_width": doc.resolution()[0], "full_height": doc.resolution()[1],
         "height_min": float(H.min()), "height_max": float(H.max()),
         "pixel_m": pm, "ms": round((time.perf_counter() - t0) * 1000, 1),
+    })
+    return BakeResult(out, info)
+
+
+# ---- zoomed-in detail ------------------------------------------------------------
+DETAIL_MAX_PX = 2048        # longest side of a detail bake (pixels)
+DETAIL_MAPS = ("normal", "height", "ao", "curvature", "id", "emissive", "wires")
+
+
+def bake_region(doc, x0, y0, x1, y1, px_per_m, maps=DETAIL_MAPS, norm=None, ao_radius=0.05):
+    """Bake one rectangle of the canvas at `px_per_m` (for the zoomed-in view).
+
+    Pixels sit on the same grid a full bake at that density would use, so a
+    detail patch lines up exactly with the canvas. A margin is baked around
+    the rectangle and cropped off, so normals, AO and wires are correct right
+    up to its edge. `norm` (height_min, height_max, emissive_scale,
+    curvature_scale) is taken from the overview so both encode identically.
+    """
+    t0 = time.perf_counter()
+    W, Hc = doc.canvas_w, doc.canvas_h
+    nx = max(8, int(round(W * px_per_m)))
+    ny = max(8, int(round(Hc * px_per_m)))
+    pmx, pmy = W / nx, Hc / ny
+    pm = 0.5 * (pmx + pmy)
+    if not doc.tiling:
+        x0, x1 = max(0.0, x0), min(W, x1)
+        y0, y1 = max(0.0, y0), min(Hc, y1)
+    i0, i1 = int(np.floor(x0 / pmx)), int(np.ceil(x1 / pmx))
+    j0, j1 = int(np.floor(y0 / pmy)), int(np.ceil(y1 / pmy))
+    if not doc.tiling:
+        i0, i1, j0, j1 = max(i0, 0), min(i1, nx), max(j0, 0), min(j1, ny)
+    w, h = min(i1 - i0, nx), min(j1 - j0, ny)
+    if w <= 0 or h <= 0:
+        raise ValueError("region is outside the canvas")
+    if max(w, h) > DETAIL_MAX_PX:
+        raise ValueError(f"region is {w} x {h} px; the limit is {DETAIL_MAX_PX}")
+    want = set(maps)
+    m = 3
+    if "ao" in want:
+        m += int(np.ceil(min(ao_radius / pm, 64.0))) + 2
+    # A wire's resting height near the edge depends on what lies under it a
+    # few radii along its length, and its connectors and clips reach past it.
+    wires = [wr for wr in getattr(doc, "wires", []) if wr.visible]
+    if wires:
+        reach = max(4 * wr.radius + 2 * wr.total_half_width() + 0.004 for wr in wires)
+        m += int(np.ceil(min(reach / pm, 256.0)))
+    # Margin on each side, never more than the canvas allows.
+    if doc.tiling:
+        mx, my = min(m, (nx - w) // 2), min(m, (ny - h) // 2)
+        wi0, wj0, wn, hn = i0 - mx, j0 - my, w + 2 * mx, h + 2 * my
+    else:
+        wi0, wj0 = max(0, i0 - m), max(0, j0 - m)
+        wn, hn = min(nx, i0 + w + m) - wi0, min(ny, j0 + h + m) - wj0
+    periodic = doc.tiling and wn == nx and hn == ny     # the window is the whole canvas
+    grid = Grid(W, Hc, nx, ny, doc.tiling, window=(wi0, wj0, wn, hn))
+    gen = get_generator(doc.generator)
+    need_emit = "emissive" in want
+    Hs, ids, Es, Ms = gen.height(doc, grid, emission=need_emit)
+    norm = norm or {}
+    ox, oy = i0 - wi0, j0 - wj0
+    crop = lambda a: a[oy: oy + h, ox: ox + w]
+    out = {}
+    if "normal" in want:
+        out["normal"] = crop(normals_from_height(Hs, pmx, pmy, doc.normal_strength, periodic))
+    out["height"] = crop(Hs)
+    if "ao" in want:
+        out["ao"] = crop(ambient_occlusion(Hs, pm, ao_radius, periodic))
+    info = {}
+    if "curvature" in want:
+        cmap, info["curvature_scale"] = curvature(Hs, pm, periodic, norm.get("curvature_scale"))
+        out["curvature"] = crop(cmap)
+    if "wires" in want and Ms is not None:
+        out["wires"] = crop(Ms)
+    if "id" in want and ids is not None:
+        out["id"] = id_colors(crop(ids))
+    if need_emit:
+        out["emissive"] = crop(Es)
+        own = float(out["emissive"].max())
+        info["emissive_scale"] = float(norm.get("emissive_scale", own))
+        info["has_emission"] = own > 0
+    H = out["height"]
+    info.update({
+        "width": w, "height": h,
+        "full_width": nx, "full_height": ny,
+        "height_min": float(norm.get("height_min", H.min())),
+        "height_max": float(norm.get("height_max", H.max())),
+        "pixel_m": pm, "px_per_m": nx / W,
+        # The exact rectangle covered, in canvas meters (snapped to the pixel grid).
+        "region": [i0 * pmx, j0 * pmy, (i0 + w) * pmx, (j0 + h) * pmy],
+        "ms": round((time.perf_counter() - t0) * 1000, 1),
     })
     return BakeResult(out, info)

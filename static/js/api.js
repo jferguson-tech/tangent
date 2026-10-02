@@ -18,6 +18,7 @@ export const api = {
   meta: () => fetch('/api/meta').then((r) => r.json()),
   bake: (doc, maps, maxRes, ss = 1) => post('/api/bake', { doc, maps, max_res: maxRes, ss }),
   layout: (doc, params) => post('/api/layout', { doc, params }),
+  bakeDetail: (doc, region, norm, maps) => post('/api/bake', { doc, region, norm, maps }),
   shuffleWires: (doc, params) => post('/api/layout/wires', { doc, params }),
   profile: (profile, points) => post('/api/profile', { profile, points }),
   export: (doc, opts) => post('/api/export', { doc, ...opts }, true),

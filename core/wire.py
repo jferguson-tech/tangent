@@ -244,12 +244,14 @@ def _sample(H, grid, x, y):
     x0 = np.floor(fx).astype(int)
     y0 = np.floor(fy).astype(int)
     tx, ty = fx - x0, fy - y0
+    # Canvas pixel index -> array index (the arrays may cover only a window;
+    # samples outside it clamp to its edge, which the bake margin keeps away).
     if grid.tiling:
-        xi = lambda i: i % grid.nx
-        yi = lambda j: j % grid.ny
+        xi = lambda i: np.clip((i - grid.wi0) % grid.nx, 0, grid.wn - 1)
+        yi = lambda j: np.clip((j - grid.wj0) % grid.ny, 0, grid.hn - 1)
     else:
-        xi = lambda i: np.clip(i, 0, grid.nx - 1)
-        yi = lambda j: np.clip(j, 0, grid.ny - 1)
+        xi = lambda i: np.clip(i - grid.wi0, 0, grid.wn - 1)
+        yi = lambda j: np.clip(j - grid.wj0, 0, grid.hn - 1)
     a = H[yi(y0), xi(x0)] * (1 - tx) + H[yi(y0), xi(x0 + 1)] * tx
     b = H[yi(y0 + 1), xi(x0)] * (1 - tx) + H[yi(y0 + 1), xi(x0 + 1)] * tx
     return a * (1 - ty) + b * ty
