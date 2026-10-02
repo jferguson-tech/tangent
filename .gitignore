@@ -1,0 +1,29 @@
+# Python virtual environment (recreate with: python -m venv _env)
+_env/
+.venv/
+venv/
+
+# Python / Numba caches
+__pycache__/
+*.py[cod]
+*.nbi
+*.nbc
+.pytest_cache/
+
+# Generated at runtime
+exports/
+hdri/.cache/
+# Your own HDRIs (often large or with their own licenses); the built-ins are procedural
+hdri/*.hdr
+
+# Editors and OS clutter
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and local tooling
+*.log
+.claude/

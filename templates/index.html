@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tangent · Sci-fi Panel Normal Maps</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312161c'/%3E%3Cpath d='M3 12 8 4l5 8z' fill='none' stroke='%2339c6e6' stroke-width='1.6'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">◢◣</span> TANGENT <small>panel normal forge</small></div>
+  <div class="group">
+    <button id="btnNew" title="New document from the default layout">New</button>
+    <button id="btnOpen" title="Open a .tangent.json document">Open</button>
+    <button id="btnSave" title="Download the document as JSON">Save</button>
+    <input id="fileOpen" type="file" accept=".json,application/json" hidden>
+  </div>
+  <div class="group">
+    <button id="btnUndo" title="Undo (Ctrl+Z)">↶ Undo</button>
+    <button id="btnRedo" title="Redo (Ctrl+Y)">↷ Redo</button>
+  </div>
+  <div class="group">
+    <button id="btnExport" class="primary" title="Export texture maps">Export maps…</button>
+  </div>
+  <div class="docinfo" id="docInfo"></div>
+</header>
+
+<main class="workspace">
+  <aside class="left sidebar">
+    <section>
+      <h3>Tools</h3>
+      <div class="seg" id="tools">
+        <button data-tool="select" class="on" title="Select, move and resize (V). Drag empty space to pan.">Select <kbd>V</kbd></button>
+        <button data-tool="draw" title="Draw a new panel (R)">Panel <kbd>R</kbd></button>
+        <button data-tool="wire" title="Add a wire: click its start, then its end (W). Hold Shift to keep adding.">Wire <kbd>W</kbd></button>
+      </div>
+      <div class="field" id="wireModeField"><span>New wires</span>
+        <div class="ctl"><select id="wireMode"><option value="sim">Simulated (gravity)</option><option value="route">Routed (Manhattan)</option></select></div>
+      </div>
+      <div id="snapField"></div>
+    </section>
+    <section class="layers-section">
+      <h3>Panels <span class="count" id="panelCount"></span></h3>
+      <div class="layers" id="layers"></div>
+    </section>
+    <section>
+      <h3>Wires <span class="count" id="wireCount"></span></h3>
+      <div class="layers" id="wireList"></div>
+    </section>
+    <section>
+      <h3>Wire simulation</h3>
+      <div class="row gap sim-buttons">
+        <button id="simRun" class="primary" title="Start, pause or resume the simulation">▶ Start</button>
+        <button id="simStep" title="Advance one frame">Step</button>
+        <button id="simReset" title="Put simulated wires back to their starting sag">Reset</button>
+      </div>
+      <div class="sim-status muted" id="simStatus">idle</div>
+      <div class="gravity">
+        <canvas id="gravDial" width="64" height="64" title="Drag to set the gravity direction"></canvas>
+        <div id="simFields"></div>
+      </div>
+    </section>
+    <section>
+      <h3>Auto-layout</h3>
+      <div id="layoutForm"></div>
+      <div class="row gap">
+        <button id="btnGenerate" title="Regenerate with this seed">Generate</button>
+        <button id="btnShuffle" class="primary" title="New random seed, then generate panels and wires">🎲 Shuffle</button>
+        <button id="btnShuffleWires" title="New wires (all kinds) on the current panels. Locked wires are kept.">🎲 Shuffle wires</button>
+      </div>
+      <p class="hint">Locked panels are kept. Generated panels that would overlap them are dropped. Undo restores the previous layout.</p>
+    </section>
+  </aside>
+
+  <section class="center">
+    <div class="pane editor-pane">
+      <div class="pane-bar">
+        <div class="seg small" id="viewModes">
+          <button data-mode="lit" class="on">Lit</button>
+          <button data-mode="normal">Normal</button>
+          <button data-mode="height">Height</button>
+          <button data-mode="ao">AO</button>
+          <button data-mode="curvature">Curvature</button>
+          <button data-mode="id">ID</button>
+          <button data-mode="emissive">Emissive</button>
+        </div>
+        <label class="chk" title="Show the texture repeated 3×3 to check seams"><input type="checkbox" id="tile3"> Tile ×3</label>
+        <label class="chk" title="Light the editor view with the pathtracer's lights instead of an even raking light"><input type="checkbox" id="matchLights" checked> Render lights</label>
+        <button id="btnFit" class="small" title="Fit view (F)">Fit</button>
+      </div>
+      <div class="viewport" id="viewport">
+        <canvas id="gl"></canvas>
+        <canvas id="overlay"></canvas>
+        <div class="busy" id="bakeBusy">baking…</div>
+      </div>
+      <div class="statusbar">
+        <span id="stCursor">—</span>
+        <span id="stBake"></span>
+        <span id="stZoom"></span>
+        <span id="stWarn" class="warn"></span>
+      </div>
+    </div>
+
+    <div class="pane render-pane">
+      <div class="pane-bar">
+        <strong>Pathtraced</strong>
+        <span id="rState" class="pill">idle</span>
+        <span id="rSpp" class="muted"></span>
+        <span class="spacer"></span>
+        <label class="chk"><input type="checkbox" id="rAuto" checked> Auto</label>
+        <button id="rRestart" class="small">Render</button>
+        <button id="rStop" class="small">Stop</button>
+        <button id="rToggle" class="small" title="Show render settings">Settings ▾</button>
+      </div>
+      <div class="render-view" id="renderView">
+        <img id="rImg" alt="" draggable="false">
+        <div class="render-msg" id="rMsg"></div>
+        <div class="render-hint">drag to orbit · wheel to zoom · double-click to reset</div>
+      </div>
+      <div class="render-settings" id="rSettings" hidden></div>
+    </div>
+  </section>
+
+  <aside class="right sidebar">
+    <div class="seg tabs" id="rightTabs">
+      <button data-tab="panel" class="on">Selection</button>
+      <button data-tab="doc">Document</button>
+    </div>
+    <div id="tabPanel" class="tab"></div>
+    <div id="tabDoc" class="tab" hidden></div>
+  </aside>
+</main>
+
+<dialog id="exportDlg">
+  <form method="dialog" id="exportForm">
+    <h2>Export maps</h2>
+    <p class="muted" id="exportInfo"></p>
+    <label class="field"><span>File name</span><input name="name" value="scifi_panel"></label>
+    <fieldset class="maps">
+      <legend>Maps</legend>
+      <label class="chk"><input type="checkbox" name="map" value="normal" checked> Normal</label>
+      <label class="chk"><input type="checkbox" name="map" value="height" checked> Height</label>
+      <label class="chk"><input type="checkbox" name="map" value="ao" checked> Ambient occlusion</label>
+      <label class="chk"><input type="checkbox" name="map" value="curvature"> Curvature</label>
+      <label class="chk"><input type="checkbox" name="map" value="id"> Panel ID mask</label>
+      <label class="chk"><input type="checkbox" name="map" value="emissive" checked> Emissive</label>
+      <label class="chk"><input type="checkbox" name="map" value="wires"> Wire mask</label>
+    </fieldset>
+    <label class="field"><span>Bit depth</span>
+      <select name="bits"><option value="8">8-bit PNG</option><option value="16" selected>16-bit PNG</option></select>
+    </label>
+    <label class="field"><span>Supersampling</span>
+      <select name="ss"><option value="">Auto (2× up to 2048 px)</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
+    </label>
+    <p class="hint">The ID mask and emissive map are always 8-bit. The emissive intensity scale is in the info file. The zip also contains the document JSON and the height range in millimeters.</p>
+    <div class="row gap end">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button id="exportGo" class="primary" value="default">Export zip</button>
+    </div>
+    <p class="muted" id="exportStatus"></p>
+  </form>
+</dialog>
+
+<script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
