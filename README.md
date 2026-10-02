@@ -20,12 +20,20 @@ _env\Scripts\python.exe -m pip install -r requirements-dev.txt   # tests only
 ## Run
 
 ```
-_env\Scripts\python.exe app.py                          # http://127.0.0.1:5000
-_env\Scripts\python.exe app.py --host 0.0.0.0 --port 8080   # serve on the LAN
+_env\Scripts\python.exe app.py                    # this computer only: http://127.0.0.1:5000
+_env\Scripts\python.exe app.py --host 0.0.0.0     # also other devices on your network
 ```
 
-`run.bat` does the first one. The first launch compiles the pathtracer, which
-takes a few seconds. Numba caches the result for later runs.
+`run.bat` does the first one. `--port` picks another port (default 5000).
+
+To use it from another device, start it with `--host 0.0.0.0`, find this PC's
+address with `ipconfig` (the IPv4 address, such as `192.168.1.20`) and open
+`http://192.168.1.20:5000` there. The first time, Windows asks whether Python
+may accept connections: allow **Private networks** only. Read the Security
+section below before serving on a network.
+
+The first launch compiles the pathtracer, which takes a few seconds. Numba
+caches the result for later runs.
 
 ## Tests
 
@@ -157,6 +165,45 @@ tests/
 
 If Numba is missing or fails to load, the editor, WebGL preview and exporters
 keep working. The render pane then says the pathtracer is unavailable.
+
+## Security
+
+Tangent has **no login**. Anyone who can reach its port can use every feature,
+including exports, renders and HDRI uploads. By default it listens only on your
+own machine (`127.0.0.1`).
+
+**Serving to other devices** (`--host 0.0.0.0`) is meant for a network you trust,
+such as your home LAN:
+
+* Never expose the port to the internet (no port forwarding, no public cloud VM
+  without a firewall or a password-protecting proxy in front).
+* When Windows asks whether Python may accept connections, allow **Private**
+  networks only, so the app is unreachable on cafe or hotel Wi-Fi.
+* Open it on other devices by IP address (`http://192.168.x.x:5000`) or by this
+  machine's name (`http://YOUR-PC-NAME:5000`). Other host names are refused
+  unless you add them with `--allow-host NAME` or the `TANGENT_ALLOWED_HOSTS`
+  environment variable (comma separated). This blocks DNS-rebinding attacks
+  from web pages.
+* `--debug` only works with a local host: Flask's debugger can run code, so the
+  app refuses to start with `--debug` and a network address.
+* Traffic is plain HTTP, so documents and renders are visible to others on the
+  same network.
+* All devices share one pathtracer: a render started on one device restarts the
+  render on another.
+* There is no memory limit: a very large export (8192 px, or high supersampling)
+  can use many gigabytes of RAM, and any device on the network can start one.
+
+**What the server guards against**
+
+* Only real `application/json` bodies are accepted by the JSON endpoints, and
+  requests that change anything must come from the app's own page (Origin and
+  `Sec-Fetch-Site` checks). Other web pages open in your browser cannot drive
+  the server.
+* Uploaded HDRIs must be valid Radiance `.hdr` files (128 MB each). Their names
+  are sanitized so they stay inside `hdri/`, and the folder is capped at 50
+  files and 2 GB.
+* Documents are validated and clamped field by field, and the page never
+  inserts names or other text as HTML.
 
 ## License
 
