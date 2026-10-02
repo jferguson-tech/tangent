@@ -6,14 +6,17 @@ A browser-based normal map tool for sci-fi panels, served by Flask. Panels are
 parametric: bevels, corners, grooves and details are stored in meters, so
 resizing a panel never changes its edge treatment. A multi-threaded CPU
 pathtracer renders a physically based preview under a sci-fi spotlight.
+Weathering (edge wear, dirt, water streaks, rust, liquid leaks, heat and soot,
+wire wear, and hand-painted strokes) is simulated on the server and exported
+as base color, roughness and metallic maps plus per-effect masks.
 
-![Output maps: pathtraced preview, normal, height, ambient occlusion, curvature, emissive, wire mask and panel ID](docs/images/output-maps.png)
+![Output maps of a weathered panel: pathtraced preview, base color, normal, height, roughness, metallic, ambient occlusion, curvature, emissive, wire mask, panel ID and the nine weathering masks](docs/images/output-maps.png)
 
-![The Tangent editor: panel and wire lists, wire simulation and auto-layout controls on the left, the lit 2D view above the pathtraced preview in the middle, and the selected panel's settings on the right](docs/images/editor-ui.jpg)
+![The Tangent editor: tools, panel and wire lists and the wire simulation on the left, the lit 2D view of a weathered panel with leak markers above the pathtraced preview in the middle, and the Surface tab with the Leaking reactor weathering settings and leak list on the right](docs/images/editor-ui.jpg)
 
-*The editor: panels, wires and auto-layout on the left, the lit 2D view and the
-pathtraced preview in the middle, and the selected panel's settings on the
-right.*
+*The editor: tools, panels, wires and the wire simulation on the left, the lit
+2D view and the pathtraced preview in the middle, and the Surface tab
+(weathering, leaks, brush and materials) on the right.*
 
 ## Setup
 
@@ -73,6 +76,8 @@ pytest runs them too when Node is installed and skips them otherwise.
 | Lock, hide | `L`, `H`. Locked panels survive auto-layout. |
 | Stack order | `[` and `]` |
 | Add a wire | `W`, then click start and end (Shift keeps the tool) |
+| Paint weathering | `B`, then drag. Settings on the Surface tab. |
+| Place a leak | `K`, then click; drag a leak to move it, `Delete` removes it |
 | Nudge | Arrow keys, Shift for ×10 |
 | Fit view | `F` |
 | Orbit the render | Drag the render view, wheel to zoom, double-click to reset |
@@ -134,7 +139,7 @@ to re-attach it. Each wire is either:
 Wires can be round tubes, ribbon cables or ribbed hoses, with connectors at the
 ends, clips along the run, several parallel strands (a harness) and emission.
 They have their own material in both previews (black rubber by default, see
-*Wire material* in the render settings) and an optional *Wire mask* export.
+*Wires* on the Surface tab) and an optional *Wire mask* export.
 New wires default to a 14 mm ribbed hose. Auto-layout adds a few wires of all
 kinds (*Wires*, *Simulated* and *Harnesses* settings), and *Shuffle wires*
 re-rolls only the wires on the current panels, keeping locked wires.
@@ -142,11 +147,75 @@ The simulation runs in the browser (`static/js/wiresim.js`); the server only
 bakes the saved shapes. A height field cannot hold empty space under a wire, so
 a wire spanning a gap reads as resting on the surface below it.
 
+**Surface and weathering.** The Surface tab sets the materials: bare metal,
+an optional paint layer over it, the wires, and a small per-panel variation.
+They drive both previews and the base color, roughness and metallic exports.
+*Weathering* (off by default) ages the surface. Pick a preset (Clean, Field
+use, Abandoned, Leaking reactor) or set *Age* and the strengths of each effect:
+
+* *Edge wear* chips paint off convex edges and corners, or polishes bare metal.
+* *Dirt* collects in crevices, corners and other occluded spots.
+* *Streaks*: simulated water droplets run over the height field in the
+  gravity direction (the same dial as the wire simulation). They slide along
+  raised edges and leave vertical grime streaks below panels and details.
+* *Rust* grows where water pools and in crevices, in patches. It pits the
+  surface, blisters nearby paint, and stains the panels below with streaks
+  carried by the same water.
+* *Heat & soot*: vents and bright lights temper nearby bare metal (straw,
+  bronze, purple, blue, closest to the source hottest) and scorch paint.
+  Vents also leave soot that rises against gravity and spreads as it goes.
+* *Wire wear*: wires rub the paint off the edges they rest on and get scuffed
+  there, rubber fades and cracks with age, and rain running along a sagging
+  wire drips from its lowest points, streaking the panels below.
+* *Auto leaks* starts that many leaks at random bolts, vents and wire
+  connectors (see below).
+
+**Leaks.** With the Leak tool (`K`), click to place a leak; one placed on a
+panel moves with it. Each leak pours water, oil or coolant (with a tint
+color), and *Amount* sets how much has leaked. A shallow-liquid simulation
+on 1 cm cells carries it down: liquid pools on ledges until it spills over,
+follows seams and grooves, and wanders a little on the micro-roughness of the
+surface. Water leaves a grimy trail with mineral rings at its edges (and
+rusts what it runs over), oil a dark glossy stain, coolant a tinted crust,
+and a still-running leak leaves its trail wet and glossy. Leaks don't depend
+on *Age*.
+
+**Brush.** With the Brush tool (`B`), paint rust, dirt, edge wear (chips),
+grime streaks, oil, soot or heat tint onto the surface, or erase them
+(*Erase* also removes what the simulation made, and *Everything* erases all
+effects). Radius, strength and hardness for new strokes are on the Surface
+tab and are remembered by the browser. A stroke painted on a panel is
+attached to it (the topmost panel under most of the stroke) and moves with it;
+one painted on empty canvas stays put.
+
+Strokes stay editable. The *Strokes* list on the Surface tab shows them newest
+first: click one to select it (it is outlined in the view) and change its
+effect, mode, radius, strength or hardness, hide it with the dot button,
+reorder it with the arrows (later strokes paint over earlier ones), or delete
+it; `Delete` removes the selected stroke while the Brush tool is active, and
+`Escape` deselects it. *Use as brush* copies a stroke's settings to the brush.
+Strokes are stored as vectors in the document, so every change is undoable,
+saved, and stays sharp at any texel density.
+
+The simulations run on the server at up to 512 px/m (leaks at 100 px/m,
+heat and soot at 128 px/m) and are cached in stages that depend only on their
+own inputs, in parallel: the first bake of a heavily weathered 2 x 2 m canvas
+takes about 3 seconds, and a brush stroke, a leak or a material change only
+reruns what it affects. Fine detail (chip edges, pits, rust color) is noise
+anchored to the canvas, so detail patches, exports and tiling canvases all
+line up. *New seed* re-rolls the pattern. While you drag a panel the 2D view
+shows the materials without weathering; it comes back when you let go. The
+*Color* and *Rough* view modes show the base color and roughness maps.
+
 **Export.** The export dialog writes a zip with the normal map (OpenGL or
 DirectX), height, AO, curvature, a panel ID mask and an emissive map as PNG,
-plus the document JSON and an info file. The info file gives the height range
-in millimeters and the emissive intensity to use in your engine, because the
-emissive PNG is normalized so its brightest texel is white.
+plus the document JSON and an info file. The base color (sRGB), roughness and
+metallic maps are on by default; you can also export an ORM map (occlusion,
+roughness and metallic in the R, G and B channels) and the weathering masks
+as grayscale images: wear, dirt, streaks, rust, wet, fluid (oil and coolant
+stains), residue (mineral rings and crust), soot and heat. The info file gives the
+height range in millimeters and the emissive intensity to use in your engine,
+because the emissive PNG is normalized so its brightest texel is white.
 
 ## Layout
 
@@ -161,7 +230,10 @@ core/
   layout.py             auto-layout (guillotine splits, symmetry, nesting, details, wires)
   wire.py               Wire model, endpoints, tube/ribbon/hose baking
   route.py              Manhattan A* wire routing (cached)
-  bake.py               height -> normal, AO, curvature, ID, emissive (+ editor spill) maps
+  bake.py               height -> normal, AO, curvature, ID, emissive, material and mask maps
+  weather.py            materials and weathering (wear, dirt, water, rust, heat, soot, wire wear)
+  fluids.py             leak sources and the shallow-liquid simulation
+  brush.py              hand-painted weathering strokes
   filters.py            blur, bloom, sRGB helpers
   png.py                8/16-bit PNG writer
 generators/
@@ -174,7 +246,8 @@ render/
   base.py               Renderer interface (future GPU backends)
   cpu.py, cpu_pathtracer.py   Numba CPU pathtracer, the only Numba code
   manager.py            background progressive render jobs
-static/, templates/     editor UI (vanilla JS, WebGL2); js/wiresim.js is the wire simulation
+static/, templates/     editor UI (vanilla JS, WebGL2); js/wiresim.js is the wire simulation,
+                        js/surface.js the Surface tab, js/weathertools.js the brush and leak tools
 tests/
 ```
 

@@ -34,6 +34,8 @@
         <button data-tool="select" class="on" title="Select, move and resize (V). Drag empty space to pan.">Select <kbd>V</kbd></button>
         <button data-tool="draw" title="Draw a new panel (R)">Panel <kbd>R</kbd></button>
         <button data-tool="wire" title="Add a wire: click its start, then its end (W). Hold Shift to keep adding.">Wire <kbd>W</kbd></button>
+        <button data-tool="brush" title="Paint or erase weathering by hand (B). Settings on the Surface tab.">Brush <kbd>B</kbd></button>
+        <button data-tool="leak" title="Place liquid leaks: click to add, drag to move, Delete to remove (K)">Leak <kbd>K</kbd></button>
       </div>
       <div class="field" id="wireModeField"><span>New wires</span>
         <div class="ctl"><select id="wireMode"><option value="sim">Simulated (gravity)</option><option value="route">Routed (Manhattan)</option></select></div>
@@ -84,6 +86,8 @@
           <button data-mode="curvature">Curvature</button>
           <button data-mode="id">ID</button>
           <button data-mode="emissive">Emissive</button>
+          <button data-mode="basecolor">Color</button>
+          <button data-mode="roughness">Rough</button>
         </div>
         <label class="chk" title="Show the texture repeated 3×3 to check seams"><input type="checkbox" id="tile3"> Tile ×3</label>
         <label class="chk" title="Light the editor view with the pathtracer's lights instead of an even raking light"><input type="checkbox" id="matchLights" checked> Render lights</label>
@@ -126,9 +130,11 @@
   <aside class="right sidebar">
     <div class="seg tabs" id="rightTabs">
       <button data-tab="panel" class="on">Selection</button>
+      <button data-tab="surface">Surface</button>
       <button data-tab="doc">Document</button>
     </div>
     <div id="tabPanel" class="tab"></div>
+    <div id="tabSurface" class="tab" hidden></div>
     <div id="tabDoc" class="tab" hidden></div>
   </aside>
 </main>
@@ -147,6 +153,11 @@
       <label class="chk"><input type="checkbox" name="map" value="id"> Panel ID mask</label>
       <label class="chk"><input type="checkbox" name="map" value="emissive" checked> Emissive</label>
       <label class="chk"><input type="checkbox" name="map" value="wires"> Wire mask</label>
+      <label class="chk"><input type="checkbox" name="map" value="basecolor" checked> Base color</label>
+      <label class="chk"><input type="checkbox" name="map" value="roughness" checked> Roughness</label>
+      <label class="chk"><input type="checkbox" name="map" value="metallic" checked> Metallic</label>
+      <label class="chk" title="Occlusion (R), roughness (G), metallic (B) in one image"><input type="checkbox" name="map" value="orm"> ORM packed</label>
+      <label class="chk" title="Wear, dirt, streaks, rust, wet, fluid stains, residue, soot and heat as separate grayscale masks"><input type="checkbox" name="map" value="masks"> Weathering masks</label>
     </fieldset>
     <label class="field"><span>Bit depth</span>
       <select name="bits"><option value="8">8-bit PNG</option><option value="16" selected>16-bit PNG</option></select>

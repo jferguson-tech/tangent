@@ -6,16 +6,27 @@ import { Store } from './store.js';
 import { GLView } from './glview.js';
 import { Editor } from './editor.js';
 import { PanelProps, DocProps, WireProps, renderLayoutForm, newPanelStyle, makeFields, plainBinder } from './props.js';
+import { SurfaceProps } from './surface.js';
+import { WeatherTools } from './weathertools.js';
 import { WireLayer, SimController, resolveEnd, isStale } from './wires.js';
 import { sagCurve } from './wiresim.js';
 import { RenderPane, computeLights } from './render.js';
 
-const MAP_FOR_MODE = { lit: 'normal', normal: 'normal', height: 'height', ao: 'ao', curvature: 'curvature', id: 'id', emissive: 'emissive' };
+const MAP_FOR_MODE = { lit: 'normal', normal: 'normal', height: 'height', ao: 'ao', curvature: 'curvature', id: 'id', emissive: 'emissive', basecolor: 'basecolor', roughness: 'rm' };
 
 async function main() {
   const meta = await api.meta();
   const restored = Store.restore();
   const store = new Store(restored && Array.isArray(restored.panels) ? restored : clone(meta.default_document));
+
+  let onToolHook = () => {};       // set once the Surface tab exists
+
+  function showTab(tab) {
+    $$('#rightTabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
+    $('#tabPanel').hidden = tab !== 'panel';
+    $('#tabDoc').hidden = tab !== 'doc';
+    $('#tabSurface').hidden = tab !== 'surface';
+  }
 
   // ---- GL view (falls back to outlines only if WebGL2 is missing) ----------
   let glview;
@@ -35,7 +46,12 @@ async function main() {
       $('#stCursor').textContent = p ? `x ${fmt(p[0] * 100, 1)} cm  y ${fmt(p[1] * 100, 1)} cm  ·  px ${Math.floor(p[0] * d)}, ${Math.floor(p[1] * d)}` : '—';
       $('#stZoom').textContent = `zoom ${editor.zoomLabel()}`;
     },
-    onToolChange: (t) => $$('#tools button').forEach((b) => b.classList.toggle('on', b.dataset.tool === t)),
+    onToolChange: (t) => {
+      $$('#tools button').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
+      // The brush and leak settings live on the Surface tab.
+      if (t === 'brush' || t === 'leak') showTab('surface');
+      onToolHook(t);
+    },
   });
 
   // ---- wires: simulation controller and editor layer ---------------------------
@@ -75,8 +91,8 @@ async function main() {
     if ($('#matchLights').checked) {
       editor.light = {
         lights: L.lights.map((l) => ({ ...l, color: dim(l.color) })),
-        albedo: s.material.albedo, metallic: s.material.metallic, roughness: s.material.roughness,
-        wire: s.wire_material,
+        albedo: doc.materials.metal.color, metallic: 1, roughness: doc.materials.metal.roughness,
+        wire: { albedo: doc.materials.wire.color, metallic: doc.materials.wire.metallic, roughness: doc.materials.wire.roughness },
         ambient: dim(L.env[0].map((v) => v * 4)),
         env: { intensity: s.environment.intensity * sl, rotation: s.environment.rotation },
       };
@@ -184,11 +200,11 @@ async function main() {
       $('#bakeBusy').classList.add('on');
       const fast = kind === 'fast';
       const maps = fast
-        ? [...new Set([MAP_FOR_MODE[editor.mode], ...(editor.mode === 'lit' ? ['emissive'] : [])])]
-        : ['normal', 'height', 'ao', 'curvature', 'id', 'emissive', 'spill', 'wires'];
-      if (fast && editor.mode === 'lit') maps.push('wires');
+        ? [...new Set([MAP_FOR_MODE[editor.mode], ...(editor.mode === 'lit' ? ['emissive', 'wires', 'basecolor', 'rm'] : [])])]
+        : ['normal', 'height', 'ao', 'curvature', 'id', 'emissive', 'spill', 'wires', 'basecolor', 'rm'];
       try {
-        const r = await api.bake(bakeDoc(), maps, fast ? 512 : 1024);
+        // Fast bakes (while dragging) skip the weathering simulation.
+        const r = await api.bake(bakeDoc(), maps, fast ? 512 : 1024, 1, fast);
         if (r.wire_paths) Object.assign(editor.wires.paths, r.wire_paths);
         await glview.setMaps(r.maps);
         if (!fast || maps.includes('height')) editor.hrange = [r.info.height_min, r.info.height_max];
@@ -297,6 +313,16 @@ async function main() {
   const renderInspector = () => { if (!wireProps.render()) panelProps.render(); };
   const refreshInspector = () => { if (store.selectedWire) wireProps.refreshValues(); else panelProps.refreshValues(); };
   const docProps = new DocProps($('#tabDoc'), store, meta, { onPrefs: () => editor.requestDraw() });
+  const surfaceProps = new SurfaceProps($('#tabSurface'), store, meta, {
+    tools: () => editor.weather, setTool: (t) => editor.setTool(t), currentTool: () => editor.tool,
+  });
+  editor.weather = new WeatherTools(editor, store, {
+    // Painting or placing a leak turns weathering on, as one undo step with the edit.
+    ensureEnabled: () => { if (!store.doc.weathering.enabled) { store.checkpoint(); store.doc.weathering.enabled = true; } },
+    onLeakSelect: () => surfaceProps.render(),
+    onStrokeSelect: (id) => { if (id) showTab('surface'); surfaceProps.render(); },
+  });
+  onToolHook = () => surfaceProps.render();
 
   let layersWarn = {};
   function renderLayers() {
@@ -444,6 +470,7 @@ async function main() {
       if (source === 'simsettings') renderSimFields();
       if (source === 'props' || source === 'sim') refreshInspector(); else renderInspector();
       docProps.render();
+      if (source !== 'props') surfaceProps.render();
       renderLayoutForm($('#layoutForm'), store, meta);
       snapRow.refresh();
       editor.requestDraw();
@@ -470,11 +497,7 @@ async function main() {
   }));
   $('#tile3').addEventListener('change', (e) => { editor.tiles = e.target.checked ? 3 : 1; editor.fit(); scheduleDetail(); });
   $('#btnFit').addEventListener('click', () => editor.fit());
-  $$('#rightTabs button').forEach((b) => b.addEventListener('click', () => {
-    $$('#rightTabs button').forEach((x) => x.classList.toggle('on', x === b));
-    $('#tabPanel').hidden = b.dataset.tab !== 'panel';
-    $('#tabDoc').hidden = b.dataset.tab !== 'doc';
-  }));
+  $$('#rightTabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
   $('#btnUndo').addEventListener('click', () => store.undo());
   $('#btnRedo').addEventListener('click', () => store.redo());
@@ -549,7 +572,8 @@ async function main() {
   $('#exportGo').addEventListener('click', async (e) => {
     e.preventDefault();
     const form = $('#exportForm');
-    const maps = $$('input[name=map]:checked', form).map((c) => c.value);
+    const maps = $$('input[name=map]:checked', form).map((c) => c.value)
+      .flatMap((m) => (m === 'masks' ? meta.mask_maps : [m]));
     if (!maps.length) { $('#exportStatus').textContent = 'Pick at least one map.'; return; }
     const name = form.elements.name.value.trim() || 'panel';
     const opts = { maps, bits: +form.elements.bits.value, name };
@@ -582,13 +606,20 @@ async function main() {
     if (k === 'v') editor.setTool('select');
     else if (k === 'r') editor.setTool('draw');
     else if (k === 'w') editor.setTool('wire');
+    else if (k === 'b') editor.setTool('brush');
+    else if (k === 'k') editor.setTool('leak');
     else if (k === 'f') editor.fit();
     else if (k === 'escape') {
       if (editor.tool === 'wire' && editor.wires.pending) { editor.wires.cancel(); return; }
+      if (editor.weather.selectedStroke) { editor.weather.selectStroke(null); return; }
       editor.setTool('select');
       store.select(null);
     }
-    else if (k === 'delete' || k === 'backspace') action('delete');
+    else if (k === 'delete' || k === 'backspace') {
+      if (editor.tool === 'leak' && editor.weather.deleteSelected()) return;
+      if (editor.tool === 'brush' && editor.weather.deleteSelectedStroke()) return;
+      action('delete');
+    }
     else if (k === 'l') action('lock');
     else if (k === 'h') action('visible');
     else if (k === ']') action('up');
@@ -612,6 +643,7 @@ async function main() {
   renderLayoutForm($('#layoutForm'), store, meta);
   renderInspector();
   docProps.render();
+  surfaceProps.render();
   renderLayers();
   renderWires();
   renderSimFields();

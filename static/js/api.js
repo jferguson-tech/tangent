@@ -16,7 +16,7 @@ async function post(url, body, asBlob = false) {
 
 export const api = {
   meta: () => fetch('/api/meta').then((r) => r.json()),
-  bake: (doc, maps, maxRes, ss = 1) => post('/api/bake', { doc, maps, max_res: maxRes, ss }),
+  bake: (doc, maps, maxRes, ss = 1, fast = false) => post('/api/bake', { doc, maps, max_res: maxRes, ss, fast }),
   layout: (doc, params) => post('/api/layout', { doc, params }),
   bakeDetail: (doc, region, norm, maps) => post('/api/bake', { doc, region, norm, maps }),
   shuffleWires: (doc, params) => post('/api/layout/wires', { doc, params }),

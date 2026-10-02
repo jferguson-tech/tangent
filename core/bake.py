@@ -14,12 +14,17 @@ import numpy as np
 from generators import Grid, get_generator
 from .filters import gauss_blur, linear_to_srgb
 from .png import to_uint
+from . import weather
 
 # Exportable maps. "spill" (blurred emission) is a preview helper for the editor.
-ALL_MAPS = ("normal", "height", "ao", "curvature", "id", "emissive", "wires")
+MATERIAL_MAPS = ("basecolor", "roughness", "metallic", "orm")
+MASK_MAPS = tuple("mask_" + m for m in weather.MASKS)
+ALL_MAPS = ("normal", "height", "ao", "curvature", "id", "emissive", "wires") + MATERIAL_MAPS + MASK_MAPS
 # Preview-only maps: blurred emission for the editor's fake spill, and the raw
 # float height field (panels only when the client hides wires) for the wire sim.
-PREVIEW_MAPS = ALL_MAPS + ("spill", "height_raw")
+# "rm" packs roughness (R) and metallic (G) for the editor's preview.
+PREVIEW_MAPS = ALL_MAPS + ("spill", "height_raw", "rm")
+SURFACE_MAPS = set(MATERIAL_MAPS) | set(MASK_MAPS) | {"rm"}
 
 # Fake light spill for the realtime view: blur radii (meters) and weights.
 SPILL_RADII = ((0.012, 0.5), (0.04, 0.33), (0.12, 0.17))
@@ -121,6 +126,10 @@ class BakeResult:
             lo, hi = self.info["height_min"], self.info["height_max"]
             v = (m - lo) / (hi - lo) if hi > lo else np.full_like(m, 0.5)
             return to_uint(v, bits)
+        if name == "basecolor":
+            return to_uint(linear_to_srgb(m), bits)
+        if name in ("rm", "orm"):
+            return to_uint(m, 8 if name == "rm" else bits)
         if name == "wires":
             return to_uint(m, 8)
         if name == "id":
@@ -133,7 +142,9 @@ class BakeResult:
         return to_uint(m, bits)
 
 
-def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05):
+def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05, weathering=True):
+    """Bake maps for the whole canvas. weathering=False skips the weathering
+    simulation (materials still apply): used for fast previews while dragging."""
     t0 = time.perf_counter()
     nx, ny = doc.resolution()
     if max_res and max(nx, ny) > max_res:
@@ -145,6 +156,10 @@ def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05):
     want = set(maps)
     need_emit = bool(want & {"emissive", "spill"})
     Hs, ids_s, Es, Ms = gen.height(doc, grid, emission=need_emit)
+    surf = None
+    if (weathering and weather.active(doc)) or (want & SURFACE_MAPS):
+        surf = weather.surface(doc, grid, ids_s, Ms, weathering)
+        Hs = Hs + surf[0]             # pits, blisters and paint chips shape the normals
 
     out = {}
     if "normal" in want:
@@ -170,6 +185,9 @@ def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05):
             out["id"] = id_colors(ids)
         if "ids" in want:
             out["ids"] = ids
+    if surf is not None:
+        _surface_outputs(out, want, surf, lambda x: _downsample(x, ss).astype(np.float32),
+                         out.get("ao") if "orm" in want else None, H, pm, doc.tiling, ao_radius)
     if need_emit:
         E = _downsample(Es, ss).astype(np.float32)
         out["emissive"] = E
@@ -197,7 +215,7 @@ def bake(doc, maps=("normal", "height"), max_res=None, ss=1, ao_radius=0.05):
 
 # ---- zoomed-in detail ------------------------------------------------------------
 DETAIL_MAX_PX = 2048        # longest side of a detail bake (pixels)
-DETAIL_MAPS = ("normal", "height", "ao", "curvature", "id", "emissive", "wires")
+DETAIL_MAPS = ("normal", "height", "ao", "curvature", "id", "emissive", "wires", "basecolor", "rm")
 
 
 def bake_region(doc, x0, y0, x1, y1, px_per_m, maps=DETAIL_MAPS, norm=None, ao_radius=0.05):
@@ -249,6 +267,10 @@ def bake_region(doc, x0, y0, x1, y1, px_per_m, maps=DETAIL_MAPS, norm=None, ao_r
     gen = get_generator(doc.generator)
     need_emit = "emissive" in want
     Hs, ids, Es, Ms = gen.height(doc, grid, emission=need_emit)
+    surf = None
+    if weather.active(doc) or (want & SURFACE_MAPS):
+        surf = weather.surface(doc, grid, ids, Ms)
+        Hs = Hs + surf[0]
     norm = norm or {}
     ox, oy = i0 - wi0, j0 - wj0
     crop = lambda a: a[oy: oy + h, ox: ox + w]
@@ -266,6 +288,9 @@ def bake_region(doc, x0, y0, x1, y1, px_per_m, maps=DETAIL_MAPS, norm=None, ao_r
         out["wires"] = crop(Ms)
     if "id" in want and ids is not None:
         out["id"] = id_colors(crop(ids))
+    if surf is not None:
+        _surface_outputs(out, want, surf, crop, out.get("ao") if "orm" in want else None,
+                         out["height"], pm, False, ao_radius)
     if need_emit:
         out["emissive"] = crop(Es)
         own = float(out["emissive"].max())
@@ -283,3 +308,23 @@ def bake_region(doc, x0, y0, x1, y1, px_per_m, maps=DETAIL_MAPS, norm=None, ao_r
         "ms": round((time.perf_counter() - t0) * 1000, 1),
     })
     return BakeResult(out, info)
+
+
+def _surface_outputs(out, want, surf, fit, ao, H, pm, tiling, ao_radius):
+    """Material and mask maps from weather.surface(), resized by `fit`."""
+    _, col, rough, met, masks = surf
+    if "basecolor" in want:
+        out["basecolor"] = fit(col)
+    if "roughness" in want:
+        out["roughness"] = fit(rough)
+    if "metallic" in want:
+        out["metallic"] = fit(met)
+    if "rm" in want:
+        r, m = fit(rough), fit(met)
+        out["rm"] = np.stack([r, m, np.zeros_like(r)], axis=-1)
+    if "orm" in want:
+        a = ao if ao is not None else ambient_occlusion(H, pm, ao_radius, tiling)
+        out["orm"] = np.stack([a, fit(rough), fit(met)], axis=-1)
+    for name in MASK_MAPS:
+        if name in want:
+            out[name] = fit(masks[name[5:]])

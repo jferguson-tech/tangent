@@ -139,7 +139,10 @@ def _furnace(env_img, metallic, rough, nee, spp):
     Hm = np.zeros((16, 16))
     Nm = np.zeros((16, 16, 3))
     Nm[..., 2] = 1
-    Vm = np.full((16, 16), 0.5)
+    Mt = np.zeros((16, 16, 5))
+    Mt[..., :3] = 1.0
+    Mt[..., 3] = metallic
+    Mt[..., 4] = rough
     sc = np.array([-50, 50, -50, 50, 0, 0, 100, 100, 100 / 16, 0, 0, 0, 1, 0, 1e-4], np.float64)
     cam = np.array([0, 0, 2, 0, 0, -1, 1, 0, 0, 0, 1, 0, 0.3, 1.0])
     mat = np.array([1, 1, 1, metallic, rough, 0.03, 0.03, 0.03, 0.6], np.float64)
@@ -148,7 +151,7 @@ def _furnace(env_img, metallic, rough, nee, spp):
     opt = np.array([1.0, 0.0, 0.0])
     acc = np.zeros((24, 24, 3))
     for _ in range(spp):
-        pt.render_pass(acc, Hm, Nm, Vm, sc, cam, mat, np.zeros((0, 14)), em.img, em.blur,
+        pt.render_pass(acc, Hm, Nm, Mt, sc, cam, mat, np.zeros((0, 14)), em.img, em.blur,
                        em.pdf, em.marg, em.cond, ep, np.zeros((4, 4, 3)), np.zeros((4, 4)),
                        np.array([0.0, 1.0]), np.zeros(1, np.int64), np.array([0.0, 1.0, 0.0]), opt)
     return (acc / spp).mean()

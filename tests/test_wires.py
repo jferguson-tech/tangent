@@ -222,7 +222,7 @@ def test_layout_endpoint_keeps_locked_wires(tmp_path):
 
 def test_pathtracer_uses_wire_material():
     pytest.importorskip("numba")
-    from render.scene import build_scene, tonemap
+    from render.scene import build_scene
     from render.cpu import CPURenderer
     d = _doc()
     d.wires = [Wire(mode="route", a=End(x=0.1, y=0.5), b=End(x=0.9, y=0.5), radius=0.03, connectors=False)]
@@ -230,11 +230,10 @@ def test_pathtracer_uses_wire_material():
     R.warmup()
     cols = []
     for alb in ([0.9, 0.05, 0.05], [0.05, 0.05, 0.9]):
+        d.materials["wire"] = {"color": alb, "metallic": 0.0, "roughness": 0.6}
         s = {"width": 64, "height": 64, "bloom": {"pathtrace": False}, "light": {"preset": "studio"},
-             "camera": {"pitch": 89, "yaw": 0, "distance": 0.8},
-             "wire_material": {"albedo": alb, "metallic": 0.0, "roughness": 0.6}}
+             "camera": {"pitch": 89, "yaw": 0, "distance": 0.8}}
         sc = build_scene(d, s)
-        assert (sc["Vm"] >= 1.5).any()
         acc = np.zeros((64, 64, 3))
         for _ in range(16):
             R.render_pass(sc, acc)
