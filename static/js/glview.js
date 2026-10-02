@@ -36,6 +36,8 @@ in vec2 v_map;
 uniform float u_detail;
 uniform sampler2D u_normal, u_height, u_ao, u_curv, u_id, u_emis, u_spill, u_wires;
 uniform vec3 u_wireAlbedo;
+uniform sampler2D u_basecolor, u_rm;   // material maps: sRGB base color; roughness (R), metallic (G)
+uniform float u_hasMat;
 uniform float u_wireMetal, u_wireRough;
 uniform int u_mode;
 uniform vec2 u_canvasM;
@@ -122,12 +124,22 @@ void main() {
   else if (u_mode == 4) c = texture(u_curv, uv).rrr;
   else if (u_mode == 5) c = texture(u_id, uv).rgb;
   else if (u_mode == 6) { c = emission(uv); hdr = true; }
+  else if (u_mode == 7) c = texture(u_basecolor, uv).rgb;
+  else if (u_mode == 8) c = texture(u_rm, uv).rrr;
   else {
     hdr = true;
     vec3 N = normalize(texture(u_normal, uv).rgb * 2.0 - 1.0);
-    float wm = step(0.5, texture(u_wires, uv).r);   // wires use their own material
-    vec3 alb = mix(u_albedo, u_wireAlbedo, wm);
-    float met = mix(u_metal, u_wireMetal, wm), rgh = mix(u_rough, u_wireRough, wm);
+    vec3 alb; float met, rgh;
+    if (u_hasMat > 0.5) {
+      // Per-pixel materials (panels, paint, wires, weathering) from the bake.
+      alb = pow(texture(u_basecolor, uv).rgb, vec3(2.2));
+      vec2 rm = texture(u_rm, uv).rg;
+      rgh = rm.r; met = rm.g;
+    } else {
+      float wm = step(0.5, texture(u_wires, uv).r);   // wires use their own material
+      alb = mix(u_albedo, u_wireAlbedo, wm);
+      met = mix(u_metal, u_wireMetal, wm); rgh = mix(u_rough, u_wireRough, wm);
+    }
     float h = mix(u_hrange.x, u_hrange.y, texture(u_height, uv).r);
     vec3 P = vec3((v_uv.x - 0.5) * u_canvasM.x, (0.5 - v_uv.y) * u_canvasM.y, h);
     vec3 V = vec3(0.0, 0.0, 1.0);
@@ -261,8 +273,9 @@ void main() {
   o = vec4(s.a > 0.0 ? c : pow(aces(b), vec3(1.0 / 2.2)), max(s.a, glow));
 }`;
 
-const MODE = { lit: 0, normal: 1, height: 2, ao: 3, curvature: 4, id: 5, emissive: 6 };
-const UNITS = { normal: 0, height: 1, ao: 2, curvature: 3, id: 4, emissive: 11, spill: 12, wires: 13 };
+const MODE = { lit: 0, normal: 1, height: 2, ao: 3, curvature: 4, id: 5, emissive: 6, basecolor: 7, roughness: 8 };
+// WebGL2 guarantees 16 texture units: maps 0-4, environment 5-10, the rest 11-15.
+const UNITS = { normal: 0, height: 1, ao: 2, curvature: 3, id: 4, emissive: 11, spill: 12, wires: 13, basecolor: 14, rm: 15 };
 const BLOOM_LEVELS = 6;
 
 export class GLView {
@@ -580,6 +593,9 @@ export class GLView {
     gl.uniform1i(u.u_emis, 11);
     gl.uniform1i(u.u_spill, 12);
     gl.uniform1i(u.u_wires, 13);
+    gl.uniform1i(u.u_basecolor, 14);
+    gl.uniform1i(u.u_rm, 15);
+    gl.uniform1f(u.u_hasMat, this.loaded.has('basecolor') && this.loaded.has('rm') ? 1 : 0);
     gl.uniform1i(u.u_mode, MODE[p.mode] ?? 0);
     gl.uniform2fv(u.u_canvasM, p.canvasM);
     gl.uniform2fv(u.u_offset, p.offset);

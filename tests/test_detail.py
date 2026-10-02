@@ -80,7 +80,8 @@ def test_detail_endpoint_and_limits():
                                   "norm": norm})
     assert r.status_code == 200
     j = r.get_json()
-    assert set(j["maps"]) == set(MAPS)
+    from core.bake import DETAIL_MAPS
+    assert set(j["maps"]) == set(DETAIL_MAPS)
     assert (j["info"]["width"], j["info"]["height"]) == (820, 615)
     assert j["info"]["height_min"] == norm["height_min"]
     # Density above the document's is clamped to the document's.

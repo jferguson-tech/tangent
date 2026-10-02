@@ -85,8 +85,10 @@ kbd { font: 10px var(--mono); color: var(--muted); border: 1px solid var(--line2
 .seg.small button { padding: 2px 8px; font-size: 12px; }
 .seg.tabs { display: flex; margin: 10px 12px 0; }
 .seg.tabs button { flex: 1; }
-#tools { display: flex; }
-#tools button { flex: 1; }
+#tools { display: flex; flex-wrap: wrap; }
+#tools button { flex: 1 1 30%; }
+#tools button:nth-child(3) { border-right: 0; }
+#tools button:nth-child(n+4) { flex-basis: 45%; border-top: 1px solid var(--line2); }
 
 /* editor viewport */
 .viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #07090c;
@@ -193,3 +195,18 @@ fieldset.maps { border: 1px solid var(--line); border-radius: 4px; display: grid
 .gravity .field { grid-template-columns: 64px minmax(0, 1fr); }
 .layer .badge.stale { color: var(--warn); }
 #wireList { max-height: 160px; }
+
+.render-settings .hint.full { grid-column: 1 / -1; }
+.seedrow { align-items: center; }
+.seedrow button { justify-self: start; }
+button.small.on { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+.btnrow { align-items: center; margin: 4px 0; }
+.leakrow { border: 1px solid var(--line2); border-radius: 4px; padding: 4px 6px; margin: 6px 0; }
+.leakrow.on { border-color: var(--accent); }
+.leakhead { display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 2px; }
+.leakhead .muted { flex: 1; font-size: 11px; }
+.leakhead .drop { width: 10px; height: 10px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); flex: none; }
+.strokelist { max-height: 340px; overflow-y: auto; margin: 4px 0; }
+.leakrow.off { opacity: 0.6; }
+.leakhead .drop.sq { border-radius: 2px; transform: none; }
+.leakhead button.icon { padding: 0 5px; }

@@ -32,7 +32,8 @@ def _scene_bake(doc):
     with _BAKE_LOCK:
         if _BAKE_CACHE["key"] == key:
             return _BAKE_CACHE["res"]
-    res = bakemod.bake(doc, maps=("normal", "height", "ids", "emissive", "wiremask"), max_res=RENDER_TEX_MAX)
+    res = bakemod.bake(doc, maps=("normal", "height", "ids", "emissive", "basecolor", "roughness", "metallic"),
+                       max_res=RENDER_TEX_MAX)
     with _BAKE_LOCK:
         _BAKE_CACHE["key"], _BAKE_CACHE["res"] = key, res
     return res
@@ -82,14 +83,6 @@ def emitter_tables(Em, width_m, height_m):
     cdf = np.concatenate([[0.0], np.cumsum(lum.ravel()[idx]) / total])
     cdf[-1] = 1.0
     return Em, np.ascontiguousarray(epd), cdf, idx
-
-
-def _variation_map(ids):
-    v = np.full(ids.shape, 0.5, np.float64)
-    m = ids > 0
-    x = np.sin(ids[m].astype(np.float64) * 12.9898 + 4.1414) * 43758.5453
-    v[m] = x - np.floor(x)
-    return v
 
 
 def _camera(c, S, aspect):
@@ -150,9 +143,9 @@ def build_scene(doc, settings):
     hs = float(s["height_scale"])
     Hm = res.maps["height"].astype(np.float64) * hs
     Nm = res.maps["normal"].astype(np.float64)
-    Vm = _variation_map(res.maps["ids"])
-    if "wires" in res.maps:
-        Vm = np.where(res.maps["wires"] > 0.5, 2.0, Vm)
+    Mt = np.ascontiguousarray(np.concatenate([
+        res.maps["basecolor"].astype(np.float64), res.maps["metallic"][..., None].astype(np.float64),
+        res.maps["roughness"][..., None].astype(np.float64)], axis=-1))
     W, Hh = doc.canvas_w, doc.canvas_h
     t = s["tiles"]
     texel = W / Hm.shape[1]
@@ -162,15 +155,11 @@ def build_scene(doc, settings):
         float(Hm.min()), float(Hm.max()), W, Hh, texel,
         1.0 if (t > 1 or doc.tiling) else 0.0,
         1.0 if s["displacement"] else 0.0,
-        0.0, hs, float(s["material"].get("variation", 0.15)),
+        0.0, hs, 0.0,
         max(1e-6, 0.02 * texel),
     ], np.float64)
-    m = s["material"]
-    wm = s["wire_material"]
-    mat = np.array([*map(float, m["albedo"]), float(m["metallic"]), float(m["roughness"]),
-                    0.03, 0.03, 0.035, 0.6,
-                    *map(float, wm["albedo"]), float(wm["metallic"]), float(wm["roughness"])],
-                   np.float64)
+    # Panel and wire materials come per texel in Mt; mat keeps the floor around the panel.
+    mat = np.array([0, 0, 0, 0, 0, 0.03, 0.03, 0.035, 0.6], np.float64)
     cam = _camera(s["camera"], S * (t if t > 1 else 1), s["width"] / s["height"])
     lights, gradient = _lights(s["light"], S)
     sl = s["scene_light"]                       # dims spotlights and HDRI together
@@ -184,7 +173,7 @@ def build_scene(doc, settings):
     emp = np.array([1.0 if res.info.get("has_emission") else 0.0, float(t), 1.0], np.float64)
     opt = np.array([s["bounces"], float(s["clamp"]), 0.02], np.float64)
     return {
-        "settings": s, "Hm": Hm, "Nm": Nm, "Vm": Vm, "sc": sc, "cam": cam,
+        "settings": s, "Hm": Hm, "Nm": Nm, "Mt": Mt, "sc": sc, "cam": cam,
         "mat": mat, "lights": lights, "opt": opt,
         "E": em.img, "EB": em.blur, "P": em.pdf, "M": em.marg, "C": em.cond, "ep": ep,
         "Em": Em, "EPD": EPD, "ECDF": ECDF, "EIDX": EIDX, "emp": emp,

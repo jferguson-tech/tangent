@@ -202,15 +202,10 @@ export class RenderPane {
     const root = $('#rSettings');
     const changed = () => { this.save(); this.onLightsChanged(); this.schedule(); };
     const F = makeFields(plainBinder(changed, () => this.onLightsChanged()));
-    const lp = this.meta.light_presets, mp = this.meta.material_presets;
+    const lp = this.meta.light_presets;
     const applyLightPreset = (name) => {
       const key = lp[name].lights[0];
       Object.assign(s.light, { preset: name, azimuth: key.azimuth, elevation: key.elevation, cone: key.cone, color: [...key.color], intensity: 1 });
-      this.buildSettings();
-    };
-    const applyMaterial = (name) => {
-      const m = mp[name];
-      Object.assign(s.material, { preset: name, albedo: [...m.albedo], metallic: m.metallic, roughness: m.roughness });
       this.buildSettings();
     };
     const es = s.environment;
@@ -254,21 +249,7 @@ export class RenderPane {
       F.range('Intensity', () => es.intensity, (v) => { es.intensity = v; }, { min: 0, max: 4, step: 0.05 }),
       F.range('Rotation', () => es.rotation, (v) => { es.rotation = v; }, { min: 0, max: 360, step: 1, digits: 0, suffix: '°' }),
       F.select('Background', () => es.background, (v) => { es.background = v; }, this.meta.backgrounds),
-      el('h4', { text: 'Material' }),
-      F.select('Preset', () => s.material.preset, applyMaterial, Object.fromEntries(Object.entries(mp).map(([k, v]) => [k, v.label]))),
-      F.color('Albedo', () => s.material.albedo, (v) => { s.material.albedo = v; }),
-      F.range('Metallic', () => s.material.metallic, (v) => { s.material.metallic = v; }),
-      F.range('Roughness', () => s.material.roughness, (v) => { s.material.roughness = v; }, { min: 0.02, max: 1 }),
-      F.range('Panel variation', () => s.material.variation, (v) => { s.material.variation = v; }, { min: 0, max: 0.6 }),
-      el('h4', { text: 'Wire material' }),
-      F.select('Preset', () => s.wire_material.preset, (name) => {
-        const m = this.meta.wire_material_presets[name];
-        Object.assign(s.wire_material, { preset: name, albedo: [...m.albedo], metallic: m.metallic, roughness: m.roughness });
-        this.buildSettings();
-      }, Object.fromEntries(Object.entries(this.meta.wire_material_presets).map(([k, v]) => [k, v.label]))),
-      F.color('Color', () => s.wire_material.albedo, (v) => { s.wire_material.albedo = v; }),
-      F.range('Metallic', () => s.wire_material.metallic, (v) => { s.wire_material.metallic = v; }),
-      F.range('Roughness', () => s.wire_material.roughness, (v) => { s.wire_material.roughness = v; }, { min: 0.02, max: 1 }),
+      el('p', { class: 'hint full', text: 'Panel, paint and wire materials, and weathering, are on the Surface tab.' }),
       el('h4', { text: 'Glow' }),
       F.check('Pathtrace bloom', () => s.bloom.pathtrace, (v) => { s.bloom.pathtrace = v; }, 'Bloom on the pathtraced image. Lighting stays physically based either way.'),
       F.check('Editor bloom', () => s.bloom.editor, (v) => { s.bloom.editor = v; }),

@@ -82,6 +82,21 @@ export function normalizeDoc(doc) {
     p.groove.emission = Object.assign(defaultEmission(), p.groove.emission || {});
     for (const d of p.details || []) d.emission = Object.assign(defaultEmission(), d.emission || {});
   }
+  const m = doc.materials || {};
+  doc.materials = {
+    metal: Object.assign({ color: [0.42, 0.44, 0.47], roughness: 0.45 }, m.metal || {}),
+    paint: Object.assign({ enabled: false, color: [0.30, 0.32, 0.34], roughness: 0.5, metallic: 0 }, m.paint || {}),
+    wire: Object.assign({ color: [0.035, 0.035, 0.04], roughness: 0.5, metallic: 0 }, m.wire || {}),
+    variation: m.variation ?? 0.15,
+  };
+  doc.weathering = Object.assign({ enabled: false, preset: 'clean', age: 0, seed: 1, edge_wear: 0.5, dirt: 0.5, streaks: 0.5,
+    rust: 0.5, heat: 0.5, wire_wear: 0.5, auto_leaks: 0 }, doc.weathering || {});
+  doc.leaks = doc.leaks || [];
+  doc.strokes = doc.strokes || [];
+  for (const st of doc.strokes) {
+    if (!st.id) st.id = 's' + Math.random().toString(16).slice(2, 10);
+    if (st.visible === undefined) st.visible = true;
+  }
   doc.wires = doc.wires || [];
   doc.wire_sim = Object.assign({ gravity_angle: 90, gravity: 1, collide: true, auto_resettle: false }, doc.wire_sim || {});
   for (const w of doc.wires) {

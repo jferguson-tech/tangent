@@ -6,6 +6,7 @@ from typing import List
 
 from .panel import Panel, _f
 from .wire import Wire, DEFAULT_SIM
+from . import weather, fluids, brush
 from .units import TEXEL_DENSITY_DEFAULT, MAX_RESOLUTION
 
 NORMAL_CONVENTIONS = ("gl", "dx")
@@ -24,6 +25,10 @@ class Document:
     layout: dict = field(default_factory=dict)   # last auto-layout params (UI state)
     wires: List[Wire] = field(default_factory=list)
     wire_sim: dict = field(default_factory=lambda: dict(DEFAULT_SIM))
+    materials: dict = field(default_factory=lambda: weather.materials_from(None))
+    weathering: dict = field(default_factory=lambda: weather.weathering_from(None))
+    leaks: List[fluids.Leak] = field(default_factory=list)       # liquid leak sources
+    strokes: list = field(default_factory=list)                  # hand-painted weathering
 
     def resolution(self):
         w = int(round(self.canvas_w * self.texel_density))
@@ -62,6 +67,10 @@ class Document:
             "layout": self.layout,
             "wires": [w.to_dict() for w in self.wires],
             "wire_sim": self.wire_sim,
+            "materials": self.materials,
+            "weathering": self.weathering,
+            "leaks": [k.to_dict() for k in self.leaks],
+            "strokes": self.strokes,
         }
 
     @classmethod
@@ -82,6 +91,10 @@ class Document:
             layout=d.get("layout") if isinstance(d.get("layout"), dict) else {},
             wires=[Wire.from_dict(w) for w in (d.get("wires") or [])][:500],
             wire_sim=_sim_settings(d.get("wire_sim")),
+            materials=weather.materials_from(d.get("materials")),
+            weathering=weather.weathering_from(d.get("weathering")),
+            leaks=fluids.leaks_from(d.get("leaks")),
+            strokes=brush.strokes_from(d.get("strokes")),
         )
 
 

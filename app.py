@@ -21,7 +21,7 @@ import numpy as np
 from flask import Flask, Response, abort, jsonify, render_template, request, send_file
 from werkzeug.exceptions import HTTPException
 
-from core import bake as bakemod, layout, profiles, route, wire as wiremod
+from core import bake as bakemod, brush, fluids, layout, profiles, route, weather, wire as wiremod
 from core.document import Document
 from core.panel import ANCHORS, CORNER_STYLES, DETAIL_MODES, DETAIL_SHAPES, PANEL_MODES
 from core.png import encode_png
@@ -145,6 +145,13 @@ def meta():
         "light_presets": LIGHT_PRESETS,
         "material_presets": MATERIAL_PRESETS,
         "wire_material_presets": WIRE_MATERIAL_PRESETS,
+        "weathering_presets": weather.PRESETS,
+        "default_materials": weather.DEFAULT_MATERIALS,
+        "default_weathering": weather.DEFAULT_WEATHERING,
+        "max_auto_leaks": weather.MAX_AUTO_LEAKS,
+        "liquids": {k: {"label": v["label"], "color": v["color"]} for k, v in fluids.LIQUIDS.items()},
+        "brush_channels": brush.CHANNEL_LABELS,
+        "mask_maps": list(bakemod.MASK_MAPS),
         "render_defaults": DEFAULT_RENDER,
         "environments": hdri.list_environments(),
         "backgrounds": {"hdri": "HDRI", "black": "Black", "blurred": "Blurred HDRI"},
@@ -172,7 +179,7 @@ def bake():
     maps = [m for m in body.get("maps", ["normal"]) if m in bakemod.PREVIEW_MAPS] or ["normal"]
     max_res = int(body.get("max_res") or 1024)
     ss = int(body.get("ss") or 1)
-    res = bakemod.bake(doc, maps=maps, max_res=max_res, ss=ss)
+    res = bakemod.bake(doc, maps=maps, max_res=max_res, ss=ss, weathering=not body.get("fast"))
     out = {}
     for m in maps:
         if m == "height_raw" and m in res.maps:

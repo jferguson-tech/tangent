@@ -124,7 +124,9 @@ def _render_block(nee, rr, spp, view_emissive=True):
     Em[(Hm > 0) & (Hm < 0.06)] = 3.0 if view_emissive else 0.0
     Nm = np.zeros((n, n, 3))
     Nm[..., 2] = 1
-    Vm = np.full((n, n), 0.5)
+    Mt = np.zeros((n, n, 5))
+    Mt[..., :3] = 0.8
+    Mt[..., 4] = 1.0
     texel = W / n
     sc = np.array([-W / 2, W / 2, -W / 2, W / 2, 0, 0.06, W, W, texel, 0, 1, 0, 1, 0, 0.02 * texel])
     cam = np.array([0, 0, 3, 0, 0, -1, 1, 0, 0, 0, 1, 0, 0.17, 1.0])
@@ -135,7 +137,7 @@ def _render_block(nee, rr, spp, view_emissive=True):
     opt = np.array([1.0, 0.0, 0.02 if rr else 0.0])
     acc = np.zeros((32, 32, 3))
     for _ in range(spp):
-        pt.render_pass(acc, Hm, Nm, Vm, sc, cam, mat, np.zeros((0, 14)), env.img, env.blur,
+        pt.render_pass(acc, Hm, Nm, Mt, sc, cam, mat, np.zeros((0, 14)), env.img, env.blur,
                        env.pdf, env.marg, env.cond, np.array([0.0, 0, 0, 0]),
                        E, EPD, ECDF, EIDX, emp, opt)
     return acc / spp

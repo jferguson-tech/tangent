@@ -7,9 +7,9 @@ Scene layout (all float64 arrays, meters):
   sc   [bx0, bx1, by0, by1, zmin, zmax, tex_w, tex_h, texel, wrap,
         displace, floor_z, normal_scale, variation, eps]
   cam  [px, py, pz, fx, fy, fz, rx, ry, rz, ux, uy, uz, tan_half_fov, aspect]
-  mat  [r, g, b, metallic, roughness, floor_r, floor_g, floor_b, floor_rough,
-        (optional) wire_r, wire_g, wire_b, wire_metallic, wire_roughness]
-  Vm   per-texel panel variation in [0, 1]; values >= 2 mark wire texels
+  mat  [unused x5, floor_r, floor_g, floor_b, floor_rough]
+  Mt   (h, w, 5) surface material per texel: linear r, g, b, metallic, roughness
+       (panels, paint, wires, weathering; see core/weather.py)
   lights (n, 14): [px, py, pz, dx, dy, dz, r, g, b, cos_inner, cos_outer, radius, 0, 0]
   E    (h, w, 3) equirect environment radiance, row 0 = zenith
   EB   (h', w', 3) blurred environment for the background option
@@ -98,12 +98,29 @@ def _normal_map(Nm, x, y, sc):
 
 
 @njit(cache=True, fastmath=True)
-def _variation(Vm, x, y, sc):
-    ny, nx = Vm.shape
+def _material(Mt, x, y, sc):
+    """Bilinear material at a surface point: (r, g, b, metallic, roughness)."""
+    ny, nx = Mt.shape[0], Mt.shape[1]
     fx, fy = _tex_coords(x, y, sc, nx, ny)
-    i = _wrapi(int(math.floor(fx + 0.5)), nx, sc[9] > 0.5)
-    j = _wrapi(int(math.floor(fy + 0.5)), ny, sc[9] > 0.5)
-    return Vm[j, i]
+    wrap = sc[9] > 0.5
+    x0 = math.floor(fx)
+    y0 = math.floor(fy)
+    tx = fx - x0
+    ty = fy - y0
+    i0 = _wrapi(int(x0), nx, wrap)
+    i1 = _wrapi(int(x0) + 1, nx, wrap)
+    j0 = _wrapi(int(y0), ny, wrap)
+    j1 = _wrapi(int(y0) + 1, ny, wrap)
+    w00 = (1 - tx) * (1 - ty)
+    w10 = tx * (1 - ty)
+    w01 = (1 - tx) * ty
+    w11 = tx * ty
+    r = Mt[j0, i0, 0] * w00 + Mt[j0, i1, 0] * w10 + Mt[j1, i0, 0] * w01 + Mt[j1, i1, 0] * w11
+    g = Mt[j0, i0, 1] * w00 + Mt[j0, i1, 1] * w10 + Mt[j1, i0, 1] * w01 + Mt[j1, i1, 1] * w11
+    b = Mt[j0, i0, 2] * w00 + Mt[j0, i1, 2] * w10 + Mt[j1, i0, 2] * w01 + Mt[j1, i1, 2] * w11
+    m = Mt[j0, i0, 3] * w00 + Mt[j0, i1, 3] * w10 + Mt[j1, i0, 3] * w01 + Mt[j1, i1, 3] * w11
+    ro = Mt[j0, i0, 4] * w00 + Mt[j0, i1, 4] * w10 + Mt[j1, i0, 4] * w01 + Mt[j1, i1, 4] * w11
+    return r, g, b, m, ro
 
 
 # ---------------------------------------------------------------- geometry
@@ -413,7 +430,7 @@ def _emit_sample(Hm, EPD, ECDF, EIDX, sc, emp):
 
 # ---------------------------------------------------------------- integrator
 @njit(cache=True, fastmath=True)
-def _trace(ox, oy, oz, dx, dy, dz, Hm, Nm, Vm, sc, mat, lights, E, EB, P, M, C, ep,
+def _trace(ox, oy, oz, dx, dy, dz, Hm, Nm, Mt, sc, mat, lights, E, EB, P, M, C, ep,
            Em, EPD, ECDF, EIDX, emp, opt):
     Lr = Lg = Lb = 0.0
     tr = tg = tb = 1.0
@@ -452,17 +469,9 @@ def _trace(ox, oy, oz, dx, dy, dz, Hm, Nm, Vm, sc, mat, lights, E, EB, P, M, C, 
             else:
                 g = (0.0, 0.0, 1.0)
             n = _normal_map(Nm, px, py, sc)
-            v = _variation(Vm, px, py, sc)
-            if v >= 1.5 and mat.shape[0] >= 14:     # wire texel: the wire material
-                base = (mat[9], mat[10], mat[11])
-                metallic = mat[12]
-                rough = max(mat[13], 0.02)
-            else:
-                v -= 0.5
-                k = 1.0 + sc[13] * v
-                base = (min(mat[0] * k, 1.0), min(mat[1] * k, 1.0), min(mat[2] * k, 1.0))
-                metallic = mat[3]
-                rough = min(max(mat[4] + sc[13] * 0.6 * v, 0.02), 1.0)
+            mr, mg, mb, metallic, rough = _material(Mt, px, py, sc)
+            base = (mr, mg, mb)
+            rough = min(max(rough, 0.02), 1.0)
             if use_emit:
                 er, eg, eb = _emission(Em, px, py, sc)
                 if er + eg + eb > 0:
@@ -606,7 +615,7 @@ def _trace(ox, oy, oz, dx, dy, dz, Hm, Nm, Vm, sc, mat, lights, E, EB, P, M, C, 
 
 
 @njit(parallel=True, nogil=True, cache=True, fastmath=True)
-def render_pass(accum, Hm, Nm, Vm, sc, cam, mat, lights, E, EB, P, M, C, ep,
+def render_pass(accum, Hm, Nm, Mt, sc, cam, mat, lights, E, EB, P, M, C, ep,
                 Em, EPD, ECDF, EIDX, emp, opt):
     """Add one sample per pixel into `accum` (h, w, 3)."""
     h, w = accum.shape[0], accum.shape[1]
@@ -619,7 +628,7 @@ def render_pass(accum, Hm, Nm, Vm, sc, cam, mat, lights, E, EB, P, M, C, ep,
             dz = cam[5] + u * cam[8] + v * cam[11]
             inv = 1.0 / math.sqrt(dx * dx + dy * dy + dz * dz)
             r, g, b = _trace(cam[0], cam[1], cam[2], dx * inv, dy * inv, dz * inv,
-                             Hm, Nm, Vm, sc, mat, lights, E, EB, P, M, C, ep,
+                             Hm, Nm, Mt, sc, mat, lights, E, EB, P, M, C, ep,
                              Em, EPD, ECDF, EIDX, emp, opt)
             accum[j, i, 0] += r
             accum[j, i, 1] += g

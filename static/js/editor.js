@@ -69,7 +69,11 @@ export class Editor {
     overlay.addEventListener('pointermove', (e) => this._move(e));
     overlay.addEventListener('pointerup', (e) => this._up(e));
     overlay.addEventListener('pointercancel', (e) => this._up(e));
-    overlay.addEventListener('pointerleave', () => { this.hover = null; this.onCursor(null); this.requestDraw(); });
+    overlay.addEventListener('pointerleave', () => {
+      this.hover = null; this.onCursor(null);
+      if (this.weather) this.weather.leave();
+      this.requestDraw();
+    });
     overlay.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
     overlay.addEventListener('contextmenu', (e) => e.preventDefault());
   }
@@ -79,7 +83,9 @@ export class Editor {
   setTool(t) {
     this.tool = t;
     if (t !== 'wire' && this.wires) this.wires.cancel();
-    this.overlay.style.cursor = t === 'draw' || t === 'wire' ? 'crosshair' : 'default';
+    if (t !== 'brush' && this.weather) this.weather.leave();
+    this.overlay.style.cursor = t === 'brush' ? 'none' : t === 'draw' || t === 'wire' || t === 'leak' ? 'crosshair' : 'default';
+    this.requestDraw();
     this.onToolChange(t);
   }
 
@@ -165,6 +171,7 @@ export class Editor {
       return;
     }
     if (e.button !== 0) return;
+    if (this.weather && this.weather.down(e, sx, sy, wx, wy)) return;
     if (this.wires && this.wires.downFirst(e, sx, sy, wx, wy)) return;
     if (this.tool === 'draw') {
       const x = this._snap(wx, e), y = this._snap(wy, e);
@@ -197,6 +204,7 @@ export class Editor {
     const [wx, wy] = this.toWorld(sx, sy);
     this.onCursor([wx, wy]);
     const d = this.drag;
+    if (!d && this.weather && this.weather.move(e, sx, sy, wx, wy)) return;
     if (this.wires && (this.wires.drag || this.tool === 'wire')) { this.wires.move(e, sx, sy, wx, wy); return; }
     if (!d) {
       if (this.tool === 'select' && !this.space) {
@@ -242,6 +250,7 @@ export class Editor {
   }
 
   _up(e) {
+    if (!this.drag && this.weather && this.weather.up()) { this.requestDraw(); return; }
     if (this.wires && this.wires.up()) { this.requestDraw(); return; }
     const d = this.drag;
     this.drag = null;
@@ -342,6 +351,7 @@ export class Editor {
     ctx.restore();
 
     if (this.wires) this.wires.draw(ctx);
+    if (this.weather) this.weather.draw(ctx);
     const p = this.store.selectedPanel;
     if (p && p.visible) this._drawSelection(p);
     if (this.drag && this.drag.kind === 'draw') {
