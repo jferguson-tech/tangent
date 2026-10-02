@@ -25,7 +25,9 @@ CACHE_DIR = HDRI_DIR / ".cache"
 RENDER_W, RENDER_H = 1024, 512       # resolution used by the pathtracer
 BLUR_W, BLUR_H = 64, 32              # "blurred" background option
 GEN_W, GEN_H = 2048, 1024            # procedural generation resolution
-MAX_HDR_BYTES = 128 * 1024 * 1024
+MAX_HDR_BYTES = 128 * 1024 * 1024            # one uploaded file
+MAX_UPLOAD_FILES = 50                         # .hdr files in hdri/
+MAX_UPLOAD_TOTAL = 2 * 1024 * 1024 * 1024     # bytes of .hdr files in hdri/
 
 
 # ---------------------------------------------------------------- .hdr I/O
@@ -337,6 +339,10 @@ def load_image(env_id):
     return img
 
 
+class UploadLimit(ValueError):
+    """The hdri folder is full (too many files or too many bytes)."""
+
+
 def save_upload(filename, data: bytes):
     """Validate and store an uploaded .hdr. Returns its environment id."""
     if len(data) > MAX_HDR_BYTES:
@@ -344,6 +350,14 @@ def save_upload(filename, data: bytes):
     read_hdr(data)  # raises ValueError if invalid
     HDRI_DIR.mkdir(parents=True, exist_ok=True)
     name = _safe_name(filename)
+    # Folder limits, counting a file this upload replaces as freed.
+    others = [f for f in HDRI_DIR.glob("*.hdr") if f.name.lower() != name.lower()]
+    if len(others) + 1 > MAX_UPLOAD_FILES:
+        raise UploadLimit(f"the hdri folder already holds {len(others)} files "
+                          f"(limit {MAX_UPLOAD_FILES}); delete some first")
+    used = sum(f.stat().st_size for f in others)
+    if used + len(data) > MAX_UPLOAD_TOTAL:
+        raise UploadLimit(f"the hdri folder would exceed {MAX_UPLOAD_TOTAL // 2**20} MB; delete some files first")
     (HDRI_DIR / name).write_bytes(data)
     return "file:" + name
 

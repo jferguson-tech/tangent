@@ -1,8 +1,10 @@
 """Tangent: sci-fi panel normal map tool (Flask server).
 
 Run with the project venv:
-    _env\\Scripts\\python.exe app.py            (http://127.0.0.1:5000)
-    _env\\Scripts\\python.exe app.py --host 0.0.0.0 --port 8080
+    _env\\Scripts\\python.exe app.py                  (this computer: http://127.0.0.1:5000)
+    _env\\Scripts\\python.exe app.py --host 0.0.0.0   (other devices on your network)
+
+See the Security section of README.md before serving beyond localhost.
 """
 from __future__ import annotations
 
@@ -11,11 +13,13 @@ import base64
 import io
 import json
 import re
+import sys
 import zipfile
 
 import numpy as np
 
-from flask import Flask, Response, jsonify, render_template, request, send_file
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file
+from werkzeug.exceptions import HTTPException
 
 from core import bake as bakemod, layout, profiles, route, wire as wiremod
 from core.document import Document
@@ -25,8 +29,19 @@ from core.units import EMISSION_UNIT, MAX_RESOLUTION, MIN_BEVEL_PX, TEXEL_DENSIT
 from render import hdri
 from render.presets import DEFAULT_RENDER, LIGHT_PRESETS, MATERIAL_PRESETS, WIRE_MATERIAL_PRESETS
 from render.scene import ENV_CACHE
+from security import RequestGuard, is_local_bind
 
 app = Flask(__name__)
+GUARD = RequestGuard()
+app.before_request(GUARD.check)
+
+
+@app.errorhandler(HTTPException)
+def _http_error(e):
+    """API errors come back as JSON the page can show."""
+    if request.path.startswith("/api/"):
+        return jsonify({"error": e.description or e.name}), e.code
+    return e
 app.config["MAX_CONTENT_LENGTH"] = hdri.MAX_HDR_BYTES + 1024 * 1024
 hdri.HDRI_DIR.mkdir(exist_ok=True)
 
@@ -70,8 +85,20 @@ DETAIL_PRESETS = {
 EMISSION_PRESETS = {"Indicator": 6.0, "Strip": 4.0, "Light panel": 1.6}
 
 
+def _json_body():
+    """The request's JSON object. Only a real application/json body is
+    accepted: browsers cannot send that cross-site without a CORS preflight,
+    which this server never grants."""
+    if not request.is_json:
+        abort(415, description="Send the request body as application/json.")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        abort(400, description="The request body must be a JSON object.")
+    return body
+
+
 def _doc_from_request():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     return Document.from_dict(body.get("doc") or {}), body
 
 
@@ -133,7 +160,7 @@ def meta():
 
 @app.post("/api/profile")
 def profile_curve():
-    body = request.get_json(force=True, silent=True) or {}
+    body = _json_body()
     return jsonify(profiles.sample(body.get("profile", "linear"), 48, body.get("points")))
 
 
@@ -285,6 +312,8 @@ def env_upload():
         return jsonify({"error": "no file"}), 400
     try:
         env_id = hdri.save_upload(f.filename, f.read())
+    except hdri.UploadLimit as e:
+        return jsonify({"error": f"Upload refused: {e}"}), 413
     except ValueError as e:
         return jsonify({"error": f"not a usable .hdr file: {e}"}), 400
     return jsonify({"id": env_id, "environments": hdri.list_environments()})
@@ -339,8 +368,15 @@ def main():
     ap = argparse.ArgumentParser(description="Tangent normal map tool")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5000)
-    ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--debug", action="store_true",
+                    help="Flask debug mode (local only: its debugger can run code)")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="extra host name to accept (IP addresses and this machine's name always work)")
     a = ap.parse_args()
+    if a.debug and not is_local_bind(a.host):
+        sys.exit("Refusing to start: --debug enables an interactive debugger that can run code, "
+                 f"so it is only allowed with a local --host (127.0.0.1 or localhost), not {a.host}.")
+    GUARD.allowed |= {h.strip().lower() for h in a.allow_host if h.strip()}
     app.run(host=a.host, port=a.port, debug=a.debug, threaded=True, use_reloader=False)
 
 
