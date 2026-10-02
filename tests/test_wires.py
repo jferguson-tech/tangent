@@ -283,3 +283,30 @@ def test_shuffle_wires_with_zero_density_still_makes_wires():
     doc = c.get("/api/meta").get_json()["default_document"]
     out = c.post("/api/layout/wires", json={"doc": doc, "params": dict(doc["layout"], wire_seed=5, wire_density=0)}).get_json()["doc"]
     assert len(out["wires"]) > 0
+
+
+def test_layout_wires_spread_out_when_most_panels_are_inset():
+    """Regression: with mostly inset panels, every wire piled onto one pair of panels."""
+    from collections import Counter
+    params = {"seed": 95984, "inset_chance": 0.78, "nest_chance": 1.0, "stop_chance": 1.0,
+              "wire_density": 0.83, "wire_sim_share": 0.0}
+    d = Document()
+    d.panels = layout.generate(d, params)
+    ws = layout.generate_wires(d, d.panels, params)
+    pairs = Counter(frozenset((w.a.panel, w.b.panel)) for w in ws)
+    ends = Counter(e.panel for w in ws for e in (w.a, w.b))
+    assert len(ws) >= 8
+    assert len(pairs) >= 6, "wires use many different panel pairs"
+    assert max(pairs.values()) <= layout.MAX_WIRES_PER_PAIR
+    assert max(ends.values()) <= layout.MAX_WIRES_PER_PANEL
+    inset_ids = {p.id for p in d.panels if p.mode == "inset"}
+    assert any(e in inset_ids for e in ends), "inset panels take wire ends too"
+
+
+def test_layout_makes_fewer_wires_rather_than_piling_up():
+    d = Document()
+    d.panels = [Panel(id="a", x=0.1, y=0.1, w=0.4, h=0.4), Panel(id="b", x=1.0, y=0.1, w=0.4, h=0.4),
+                Panel(id="tiny", x=1.6, y=1.6, w=0.05, h=0.05)]
+    ws = layout.generate_wires(d, d.panels, {"seed": 1, "wire_density": 5.0})
+    assert len(ws) == layout.MAX_WIRES_PER_PAIR          # one usable pair, capped
+    assert all({w.a.panel, w.b.panel} == {"a", "b"} for w in ws)

@@ -335,6 +335,10 @@ WIRE_PARAMS = {
 DEFAULT_PARAMS.update(WIRE_PARAMS)
 
 
+MAX_WIRES_PER_PANEL = 4
+MAX_WIRES_PER_PAIR = 2
+
+
 def _wire_end(panel, rng, toward):
     """An endpoint on a panel edge facing `toward`, offset inward past the bevel."""
     from .wire import End
@@ -356,22 +360,46 @@ def generate_wires(doc, panels, params=None, keep=()):
     p = params_from(params)
     wseed = int(p["wire_seed"]) or int(p["seed"])
     rng = random.Random(wseed * 104729 + 7)
-    cands = [q for q in panels if q.mode == "raise" and not q.name.endswith("inner")
-             and min(q.w, q.h) > 0.12]
+    # Any panel big enough for a connector can take a wire end, raised or inset.
+    cands = [q for q in panels if q.visible and min(q.w, q.h) > 0.12]
     n = int(round(p["wire_density"] * len(panels)))
     wires = list(keep)
     if len(cands) < 2 or n <= 0:
         return wires
     S = max(doc.canvas_w, doc.canvas_h)
+    center = lambda q: (q.x + q.w / 2, q.y + q.h / 2)
+    # Spread the wires out: a panel takes at most MAX_PER_PANEL ends and a pair
+    # of panels at most MAX_PER_PAIR wires; less-used panels are preferred. When
+    # no allowed pair is left, fewer wires are made instead of piling them up.
+    use = {q.id: 0 for q in cands}
+    pairs = {}
+    for w in keep:
+        for e in (w.a, w.b):
+            if e.panel in use:
+                use[e.panel] += 1
+        if w.a.panel and w.b.panel:
+            k = frozenset((w.a.panel, w.b.panel))
+            pairs[k] = pairs.get(k, 0) + 1
+    weight = lambda q: 1.0 / (1 + use[q.id]) ** 2
+
+    def partners(a):
+        ca = center(a)
+        return [q for q in cands if q is not a and use[q.id] < MAX_WIRES_PER_PANEL
+                and pairs.get(frozenset((a.id, q.id)), 0) < MAX_WIRES_PER_PAIR
+                and 0.15 * S < math.hypot(center(q)[0] - ca[0], center(q)[1] - ca[1]) < 0.65 * S]
+
     for i in range(n):
-        a = rng.choice(cands)
-        ca = (a.x + a.w / 2, a.y + a.h / 2)
-        far = [q for q in cands if q is not a
-               and 0.15 * S < math.hypot(q.x + q.w / 2 - ca[0], q.y + q.h / 2 - ca[1]) < 0.65 * S]
-        if not far:
-            continue
-        b = rng.choice(far)
-        cb = (b.x + b.w / 2, b.y + b.h / 2)
+        starts = [q for q in cands if use[q.id] < MAX_WIRES_PER_PANEL and partners(q)]
+        if not starts:
+            break
+        a = rng.choices(starts, weights=[weight(q) for q in starts])[0]
+        far = partners(a)
+        b = rng.choices(far, weights=[weight(q) for q in far])[0]
+        use[a.id] += 1
+        use[b.id] += 1
+        k = frozenset((a.id, b.id))
+        pairs[k] = pairs.get(k, 0) + 1
+        ca, cb = center(a), center(b)
         sim = rng.random() < p["wire_sim_share"]
         r = rng.random()
         profile = "hose" if r < 0.2 else "ribbon" if r < 0.32 else "round"
