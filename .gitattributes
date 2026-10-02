@@ -1,0 +1,7 @@
+# Normalize line endings in the repository; check out with native endings.
+* text=auto
+*.bat text eol=crlf
+*.png binary
+*.hdr binary
+*.npy binary
+*.npz binary
