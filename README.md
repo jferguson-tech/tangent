@@ -1,5 +1,7 @@
 # Tangent
 
+[![tests](https://github.com/jferguson-tech/tangent/actions/workflows/tests.yml/badge.svg)](https://github.com/jferguson-tech/tangent/actions/workflows/tests.yml)
+
 A browser-based normal map tool for sci-fi panels, served by Flask. Panels are
 parametric: bevels, corners, grooves and details are stored in meters, so
 resizing a panel never changes its edge treatment. A multi-threaded CPU
