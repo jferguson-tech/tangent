@@ -140,6 +140,8 @@ def profile_curve():
 @app.post("/api/bake")
 def bake():
     doc, body = _doc_from_request()
+    if body.get("region"):
+        return bake_detail(doc, body)
     maps = [m for m in body.get("maps", ["normal"]) if m in bakemod.PREVIEW_MAPS] or ["normal"]
     max_res = int(body.get("max_res") or 1024)
     ss = int(body.get("ss") or 1)
@@ -159,6 +161,23 @@ def bake():
             P = wiremod.resolved_path(w, doc)
             paths[w.id] = np.round(P, 5).tolist()
     return jsonify({"maps": out, "info": res.info, "warnings": doc.warnings(), "wire_paths": paths})
+
+
+def bake_detail(doc, body):
+    """A rectangle of the canvas at full density, for the zoomed-in 2D view."""
+    reg = body["region"]
+    norm = body.get("norm") if isinstance(body.get("norm"), dict) else None
+    maps = [m for m in body.get("maps", bakemod.DETAIL_MAPS) if m in bakemod.DETAIL_MAPS] or ["normal"]
+    try:
+        x0, y0, x1, y1 = (float(reg[k]) for k in ("x0", "y0", "x1", "y1"))
+        ppm = float(reg.get("px_per_m") or doc.texel_density)
+        if not (x1 > x0 and y1 > y0 and 1 <= ppm <= 16384):
+            raise ValueError("bad region")
+        res = bakemod.bake_region(doc, x0, y0, x1, y1, min(ppm, doc.texel_density), maps, norm)
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"error": str(e)}), 400
+    out = {m: _data_url(encode_png(res.encode(m, 8, "gl"), level=1)) for m in maps if m in res.maps}
+    return jsonify({"maps": out, "info": res.info})
 
 
 @app.post("/api/layout")

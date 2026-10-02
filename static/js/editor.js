@@ -59,6 +59,7 @@ export class Editor {
     this.bloom = { enabled: true, threshold: 1.5, intensity: 0.2, radius: 1 };
     this.drag = null;
     this.hover = null;
+    this.onViewChange = () => {};   // pan, zoom, fit or resize
     this.space = false;
     this.fitted = false;
     this._raf = 0;
@@ -90,6 +91,7 @@ export class Editor {
     this.overlay.width = Math.round(r.width * dpr);
     this.overlay.height = Math.round(r.height * dpr);
     if (!this.fitted && r.width > 10) { this.fit(); this.fitted = true; }
+    this.onViewChange();
     this.requestDraw();
   }
 
@@ -99,6 +101,7 @@ export class Editor {
     this.view.scale = s;
     this.view.ox = (this.cssW - this.doc.canvas_w * s) / 2;
     this.view.oy = (this.cssH - this.doc.canvas_h * s) / 2;
+    this.onViewChange();
     this.requestDraw();
   }
 
@@ -209,6 +212,7 @@ export class Editor {
     if (d.kind === 'pan') {
       this.view.ox = d.ox + (sx - d.sx);
       this.view.oy = d.oy + (sy - d.sy);
+      this.onViewChange();
       this.requestDraw();
       return;
     }
@@ -269,6 +273,7 @@ export class Editor {
     this.view.scale = clamp(this.view.scale * k, minS, texel * 48);
     this.view.ox = sx - wx * this.view.scale;
     this.view.oy = sy - wy * this.view.scale;
+    this.onViewChange();
     this.requestDraw();
   }
 

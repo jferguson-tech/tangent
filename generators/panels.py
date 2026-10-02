@@ -18,10 +18,10 @@ class PanelGenerator(Generator):
     name = "panels"
 
     def height(self, doc, grid: Grid, emission=False):
-        H = np.zeros((grid.ny, grid.nx), np.float32)
-        ids = np.zeros((grid.ny, grid.nx), np.int32)
+        H = np.zeros(grid.shape, np.float32)
+        ids = np.zeros(grid.shape, np.int32)
         emit = emission and any(p.visible and p.has_emission() for p in doc.panels)
-        E = np.zeros((grid.ny, grid.nx, 3), np.float32) if emission else None
+        E = np.zeros(grid.shape + (3,), np.float32) if emission else None
         pm = grid.pm
         for index, p in enumerate(doc.panels):
             if not p.visible:
@@ -52,7 +52,7 @@ class PanelGenerator(Generator):
             for det in p.details:
                 self._detail(H, E if emit else None, grid, p, det)
         # Wires lie on top of the panels (and on each other, in order).
-        M = np.zeros((grid.ny, grid.nx), np.float32)
+        M = np.zeros(grid.shape, np.float32)
         wiremod.composite(H, ids, E, M, grid, doc, len(doc.panels))
         return H, ids, E, M
 

@@ -61,6 +61,13 @@ pytest runs them too when Node is installed and skips them otherwise.
 | Fit view | `F` |
 | Orbit the render | Drag the render view, wheel to zoom, double-click to reset |
 
+**Zoom detail.** The 2D view shows an overview of at most 1024 px across the
+canvas. Zoom in further and the visible area is baked again at up to the full
+texel density (never more than your screen can show) and drawn over the
+overview, so higher densities are visible up close. The status bar shows the
+patch size and density. Any edit drops the patch until the next bake, so it
+never shows stale geometry. Exports always use the full density.
+
 **Tiling.** Seamless mode is off by default, because a layout with a border or
 seam already repeats cleanly. Turn it on when panels cross the canvas edge.
 Their distance fields then wrap to the opposite side. Use *Tile ×3* in the

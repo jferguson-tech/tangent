@@ -9,10 +9,20 @@ uniform vec2 u_offset;    // screen offset of the canvas origin (css px)
 uniform float u_scale;    // css px per meter
 uniform vec2 u_viewport;  // css px
 uniform float u_tiles;
-out vec2 v_uv;
+uniform float u_detail;   // 1 = drawing the zoomed-in detail patch
+uniform vec4 u_quad;      // detail patch rectangle in canvas uv (x0, y0, x1, y1)
+out vec2 v_uv;            // canvas uv (outside 0..1 = repeated tiles)
+out vec2 v_map;           // detail texture uv
 void main() {
-  float k = (u_tiles - 1.0) * 0.5;
-  vec2 uv = mix(vec2(-k), vec2(1.0 + k), a_pos);
+  vec2 uv;
+  if (u_detail > 0.5) {
+    uv = mix(u_quad.xy, u_quad.zw, a_pos);
+    v_map = a_pos;
+  } else {
+    float k = (u_tiles - 1.0) * 0.5;
+    uv = mix(vec2(-k), vec2(1.0 + k), a_pos);
+    v_map = vec2(0.0);
+  }
   v_uv = uv;
   vec2 s = u_offset + uv * u_canvasM * u_scale;
   vec2 c = s / u_viewport * 2.0 - 1.0;
@@ -22,6 +32,8 @@ void main() {
 const FS = `#version 300 es
 precision highp float;
 in vec2 v_uv;
+in vec2 v_map;
+uniform float u_detail;
 uniform sampler2D u_normal, u_height, u_ao, u_curv, u_id, u_emis, u_spill, u_wires;
 uniform vec3 u_wireAlbedo;
 uniform float u_wireMetal, u_wireRough;
@@ -99,7 +111,8 @@ vec3 emission(vec2 uv) { return pow(texture(u_emis, uv).rgb, vec3(2.2)) * u_emis
 vec3 spill(vec2 uv) { return pow(texture(u_spill, uv).rgb, vec3(2.2)) * u_spillScale; }
 
 void main() {
-  vec2 uv = fract(v_uv);
+  vec2 cuv = fract(v_uv);                        // canvas uv (spill is canvas-wide)
+  vec2 uv = u_detail > 0.5 ? v_map : cuv;        // uv into the bound map textures
   bool center = all(greaterThanEqual(v_uv, vec2(0.0))) && all(lessThan(v_uv, vec2(1.0)));
   vec3 c;
   bool hdr = false;
@@ -150,12 +163,12 @@ void main() {
     // Fake light spill: blurred emission as a nearby light. Its gradient points
     // toward the source, which tilts the light direction so facing bevels catch it.
     if (u_spillScale > 0.0 && u_spillGain > 0.0) {
-      vec3 sp = spill(uv);
+      vec3 sp = spill(cuv);
       float l0 = dot(sp, LUMA);
       if (l0 > 1e-5) {
         vec2 d = u_spillTexel * 3.0;
-        float gx = dot(spill(uv + vec2(d.x, 0.0)) - spill(uv - vec2(d.x, 0.0)), LUMA);
-        float gy = dot(spill(uv - vec2(0.0, d.y)) - spill(uv + vec2(0.0, d.y)), LUMA);
+        float gx = dot(spill(cuv + vec2(d.x, 0.0)) - spill(cuv - vec2(d.x, 0.0)), LUMA);
+        float gy = dot(spill(cuv - vec2(0.0, d.y)) - spill(cuv + vec2(0.0, d.y)), LUMA);
         vec2 g = vec2(gx, gy) / (2.0 * l0);
         vec3 L = normalize(vec3(g * 4.0, 1.0));
         col += brdf(N, V, L, alb, met, max(rgh, 0.55)) * sp * u_spillGain * PI * ao;
@@ -291,6 +304,7 @@ export class GLView {
     this.envTex = [];
     this.envId = null;
     this.targets = null;
+    this.detail = null;      // { tex: {name: texture}, rect: [u0, v0, u1, v1], size: [w, h], token }
   }
 
   _uniforms(prog) {
@@ -414,6 +428,42 @@ export class GLView {
     this.filterNearest = null;  // force filter refresh
   }
 
+  // Detail patch: maps {name: dataURL} covering rect (canvas uv). `token`
+  // lets the caller drop a result that arrives after the document changed.
+  async setDetail(maps, rect, token) {
+    const gl = this.gl;
+    const entries = Object.entries(maps).filter(([k]) => k in UNITS && k !== 'spill');
+    const imgs = await Promise.all(entries.map(([name, url]) => new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => res([name, img]);
+      img.onerror = rej;
+      img.src = url;
+    })));
+    if (this.detailToken !== token) return false;     // superseded while decoding
+    const tex = {};
+    let size = [1, 1];
+    for (const [name, img] of imgs) {
+      const t = (this.detail && this.detail.tex[name]) || this._spare?.[name] || gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      tex[name] = t;
+      size = [img.width, img.height];
+    }
+    this.detail = { tex, rect, size, token };
+    return true;
+  }
+
+  clearDetail() {
+    if (this.detail) this._spare = this.detail.tex;   // reuse the texture objects next time
+    this.detail = null;
+    this.detailToken = (this.detailToken || 0) + 1;
+  }
+
   resize(w, h, dpr) {
     const W = Math.max(1, Math.round(w * dpr)), H = Math.max(1, Math.round(h * dpr));
     if (this.canvas.width !== W || this.canvas.height !== H) {
@@ -431,7 +481,8 @@ export class GLView {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    this._drawScene(p, !T);
+    this._drawScene(p, !T, null);
+    if (this.detail) this._drawScene(p, !T, this.detail);
     if (!T) return;
     const b = p.bloom || {};
     const useBloom = b.enabled !== false && (b.intensity ?? 0) > 0;
@@ -477,11 +528,33 @@ export class GLView {
     gl.disable(gl.BLEND);
   }
 
-  _drawScene(p, tonemapHere) {
+  _drawScene(p, tonemapHere, detail) {
     const gl = this.gl;
     gl.useProgram(this.prog);
     gl.bindVertexArray(this.vao);
     const u = this.u;
+    if (detail) {
+      // Detail pass: the same shading over just the patch, reading its textures.
+      const [u0, v0, u1, v1] = detail.rect;
+      const texelPx = (p.scale * p.canvasM[0] * (u1 - u0)) / detail.size[0];
+      const f = texelPx > 3 ? gl.NEAREST : gl.LINEAR;
+      for (const [name, unit] of Object.entries(UNITS)) {
+        const t = name === 'spill' ? this.tex.spill : detail.tex[name] || this.tex[name];
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        if (name !== 'spill' && detail.tex[name]) {
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
+        }
+      }
+      gl.uniform1f(u.u_detail, 1);
+      gl.uniform4f(u.u_quad, u0, v0, u1, v1);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.uniform1f(u.u_detail, 0);
+      gl.bindVertexArray(null);
+      return;
+    }
+    gl.uniform1f(u.u_detail, 0);
     const ts = this.texSize.normal || [1, 1];
     const texelPx = p.scale * p.canvasM[0] / ts[0];
     const nearest = texelPx > 3;
