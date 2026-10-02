@@ -5,6 +5,8 @@ parametric: bevels, corners, grooves and details are stored in meters, so
 resizing a panel never changes its edge treatment. A multi-threaded CPU
 pathtracer renders a physically based preview under a sci-fi spotlight.
 
+![Output maps: pathtraced preview, normal, height, ambient occlusion, curvature, emissive, wire mask and panel ID](docs/images/output-maps.png)
+
 ## Setup
 
 Everything installs into the project venv `_env`. Nothing touches system Python.
