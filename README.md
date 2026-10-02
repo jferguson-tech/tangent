@@ -7,6 +7,12 @@ pathtracer renders a physically based preview under a sci-fi spotlight.
 
 ![Output maps: pathtraced preview, normal, height, ambient occlusion, curvature, emissive, wire mask and panel ID](docs/images/output-maps.png)
 
+![The Tangent editor: panel and wire lists, wire simulation and auto-layout controls on the left, the lit 2D view above the pathtraced preview in the middle, and the selected panel's settings on the right](docs/images/editor-ui.jpg)
+
+*The editor: panels, wires and auto-layout on the left, the lit 2D view and the
+pathtraced preview in the middle, and the selected panel's settings on the
+right.*
+
 ## Setup
 
 Everything installs into the project venv `_env`. Nothing touches system Python.
